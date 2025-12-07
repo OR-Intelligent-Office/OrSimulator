@@ -64,6 +64,10 @@ fun Application.configureRouting() {
     SimulatorManager.initialize(this)
 
     routing {
+        get("/") {
+            call.respondText("Hello World!")
+        }
+        
         route("/api/environment") {
             get("/state") {
                 val simulator =

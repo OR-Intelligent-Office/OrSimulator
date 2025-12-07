@@ -14,7 +14,7 @@ class EnvironmentSimulator(
     private val random = Random.Default
     private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
     private var currentState: EnvironmentState = createInitialState()
-    private var simulationStartTime: LocalDateTime = LocalDateTime.now()
+    private var currentSimulationTime: LocalDateTime = LocalDateTime.now()
 
     // Parametry symulacji
     private var externalTemperature: Double = 15.0 // temperatura zewnętrzna w stopniach C
@@ -35,23 +35,23 @@ class EnvironmentSimulator(
 
     fun update(deltaMinutes: Double = 1.0) {
         val actualDelta = deltaMinutes * timeSpeedMultiplier
-        val currentTime = simulationStartTime.plusMinutes(actualDelta.toLong())
+        currentSimulationTime = currentSimulationTime.plusMinutes(actualDelta.toLong())
 
         // Aktualizacja czasu symulacji
         currentState =
             currentState.copy(
-                simulationTime = currentTime.format(formatter),
+                simulationTime = currentSimulationTime.format(formatter),
                 externalTemperature = externalTemperature,
                 timeSpeedMultiplier = timeSpeedMultiplier,
                 powerOutage = powerOutage,
                 daylightIntensity = daylightIntensity,
             )
 
-        updatePeopleMovement(currentTime)
+        updatePeopleMovement(currentSimulationTime)
         updateTemperatures()
-        checkDeviceFailures(currentTime)
-        generateRandomEvents(currentTime)
-        updateDeviceStates(currentTime)
+        checkDeviceFailures(currentSimulationTime)
+        generateRandomEvents(currentSimulationTime)
+        updateDeviceStates(currentSimulationTime)
     }
 
     private fun updatePeopleMovement(currentTime: LocalDateTime) {
