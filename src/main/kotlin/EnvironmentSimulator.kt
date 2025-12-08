@@ -7,9 +7,9 @@ import kotlin.math.min
 import kotlin.random.Random
 
 class EnvironmentSimulator(
-    private val rooms: List<RoomConfig> = defaultRooms(),
-    private val timeSpeedMultiplier: Double = 1.0,
-    private val failureProbability: Double = 0.01,
+    private val rooms: List<RoomConfig>,
+    private val timeSpeedMultiplier: Double,
+    private val failureProbability: Double,
 ) {
     private val random = Random.Default
     private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
@@ -112,11 +112,11 @@ class EnvironmentSimulator(
     private fun updateTemperatures() {
         val heatLossFactor = 0.1 // współczynnik strat ciepła
         val targetTemperature = if (heatingOn) 22.0 else externalTemperature
-        val noise = random.nextDouble() * 1.0 - 0.5 // szum losowy -0.5 do 0.5
 
         currentState.rooms.forEach { room ->
             val currentTemp = room.temperatureSensor.temperature
             val tempDiff = targetTemperature - currentTemp
+            val noise = random.nextDouble() * 1.0 - 0.5 // szum losowy -0.5 do 0.5
             val newTemp = currentTemp + tempDiff * 0.1 + noise // powolna zmiana + szum
 
             // Ograniczenie zakresu temperatury
@@ -333,7 +333,6 @@ class EnvironmentSimulator(
     }
 
     fun setTimeSpeedMultiplier(multiplier: Double) {
-        // Można dodać setter dla prędkości czasu
     }
 
     fun setExternalTemperature(temp: Double) {
@@ -345,7 +344,6 @@ class EnvironmentSimulator(
     }
 }
 
-// Konfiguracja pokoi
 data class RoomConfig(
     val id: String,
     val name: String,

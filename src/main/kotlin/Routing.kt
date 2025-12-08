@@ -1,20 +1,11 @@
 package com.agh
 
-import io.ktor.resources.*
 import io.ktor.server.application.*
 import io.ktor.server.resources.*
-import io.ktor.server.resources.Resources
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.*
-import kotlinx.serialization.Serializable
 import kotlin.time.Duration.Companion.seconds
-
-@Serializable
-data class Test(
-    val id: Int,
-    val name: String,
-)
 
 // Singleton symulatora środowiska
 object SimulatorManager {
@@ -67,7 +58,7 @@ fun Application.configureRouting() {
         get("/") {
             call.respondText("Hello World!")
         }
-        
+
         route("/api/environment") {
             get("/state") {
                 val simulator =
