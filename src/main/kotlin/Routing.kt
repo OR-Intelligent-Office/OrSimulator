@@ -196,6 +196,73 @@ fun Application.configureRouting() {
                 call.respond(allDevices)
             }
 
+            // Endpointy kontroli światła
+            route("/devices/light/{lightId}") {
+                get {
+                    val lightId = call.parameters["lightId"]
+                    val simulator =
+                        SimulatorManager.getSimulator()
+                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    
+                    val light = simulator.getLight(lightId ?: "")
+                    if (light != null) {
+                        call.respond(light)
+                    } else {
+                        call.respond(mapOf("error" to "Light not found"))
+                    }
+                }
+
+                post("/control") {
+                    val lightId = call.parameters["lightId"] ?: ""
+                    val simulator =
+                        SimulatorManager.getSimulator()
+                            ?: return@post call.respond(mapOf("error" to "Simulator not initialized"))
+                    
+                    try {
+                        val bodyText = call.receiveText()
+                        println("Light control request for $lightId: $bodyText")
+                        
+                        // Prosty parsing JSON
+                        val stateMatch = Regex(""""state"\s*:\s*"(\w+)"""").find(bodyText)
+                        val brightnessMatch = Regex(""""brightness"\s*:\s*(\d+)""").find(bodyText)
+                        
+                        val state = stateMatch?.groupValues?.get(1)
+                        val brightness = brightnessMatch?.groupValues?.get(1)?.toIntOrNull()
+                        
+                        println("Parsed - state: $state, brightness: $brightness")
+                        
+                        when (state) {
+                            "ON" -> {
+                                val success = simulator.setLightState(lightId, DeviceState.ON, brightness)
+                                if (success) {
+                                    call.respond(mapOf(
+                                        "success" to true, 
+                                        "message" to "Light turned on" + (brightness?.let { " with brightness $it%" } ?: "")
+                                    ))
+                                } else {
+                                    call.respond(mapOf("success" to false, "error" to "Light not found or broken"))
+                                }
+                            }
+                            "OFF" -> {
+                                val success = simulator.setLightState(lightId, DeviceState.OFF)
+                                if (success) {
+                                    call.respond(mapOf("success" to true, "message" to "Light turned off"))
+                                } else {
+                                    call.respond(mapOf("success" to false, "error" to "Light not found"))
+                                }
+                            }
+                            else -> {
+                                call.respond(mapOf("success" to false, "error" to "Missing or invalid state: $state"))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("Error in light control: ${e.message}")
+                        e.printStackTrace()
+                        call.respond(mapOf("success" to false, "error" to (e.message ?: "Unknown error")))
+                    }
+                }
+            }
+            
             // Endpointy kontroli drukarki
             route("/devices/printer/{printerId}") {
                 get {
@@ -297,13 +364,28 @@ fun Application.configureRouting() {
                         @Suppress("UNCHECKED_CAST")
                         val data = request["data"] as? Map<String, Any> ?: emptyMap<String, Any>()
                         
+                        // Obsługa alertów drukarek
                         val printerId = data["printer_id"] as? String ?: ""
-                        val room = simulator.getCurrentState().rooms.find { 
-                            it.printer?.id == printerId 
+                        val lightId = data["light_id"] as? String ?: ""
+                        val roomName = data["room"] as? String ?: data["room_name"] as? String ?: ""
+                        
+                        val room = when {
+                            printerId.isNotEmpty() -> simulator.getCurrentState().rooms.find { 
+                                it.printer?.id == printerId 
+                            }
+                            lightId.isNotEmpty() -> simulator.getCurrentState().rooms.find { room ->
+                                room.lights.any { it.id == lightId }
+                            }
+                            roomName.isNotEmpty() -> simulator.getCurrentState().rooms.find {
+                                it.name == roomName
+                            }
+                            else -> null
                         }
                         
                         val tonerLevelValue = data.get("toner_level")
                         val paperLevelValue = data.get("paper_level")
+                        val brightnessValue = data.get("brightness")
+                        
                         val tonerLevel = when {
                             tonerLevelValue is Number -> tonerLevelValue.toString()
                             tonerLevelValue is String -> tonerLevelValue
@@ -314,25 +396,45 @@ fun Application.configureRouting() {
                             paperLevelValue is String -> paperLevelValue
                             else -> "0"
                         }
+                        val brightness = when {
+                            brightnessValue is Number -> brightnessValue.toString()
+                            brightnessValue is String -> brightnessValue
+                            else -> ""
+                        }
+                        
+                        val deviceId = when {
+                            printerId.isNotEmpty() -> printerId
+                            lightId.isNotEmpty() -> lightId
+                            else -> ""
+                        }
                         
                         val alert = Alert(
                             id = "alert_${System.currentTimeMillis()}",
                             type = alertType,
-                            printerId = printerId,
+                            printerId = deviceId,
                             roomId = room?.id,
-                            roomName = room?.name,
+                            roomName = room?.name ?: roomName,
                             message = when (alertType) {
+                                // Alerty drukarek
                                 "low_toner" -> "Niski poziom tonera w drukarence ${printerId}: ${tonerLevel}%"
                                 "low_paper" -> "Niski poziom papieru w drukarence ${printerId}: ${paperLevel}%"
                                 "printer_failure" -> "Awaria drukarki ${printerId} w sali ${room?.name ?: "nieznanej"}"
-                                else -> "Alert: $alertType"
+                                // Alerty świateł
+                                "light_on" -> "Światło ${lightId} włączone w ${room?.name ?: roomName}" + 
+                                    (if (brightness.isNotEmpty()) " (jasność: ${brightness}%)" else "")
+                                "light_off" -> "Światło ${lightId} wyłączone w ${room?.name ?: roomName}"
+                                "brightness_changed" -> "Zmiana jasności ${lightId} na ${brightness}% w ${room?.name ?: roomName}"
+                                "light_failure" -> "Awaria światła ${lightId} w ${room?.name ?: roomName}"
+                                "power_outage" -> "Awaria zasilania - urządzenia niedostępne"
+                                else -> data["message"] as? String ?: "Alert: $alertType"
                             },
                             timestamp = java.time.LocalDateTime.now().format(
                                 java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME
                             ),
                             severity = when (alertType) {
-                                "printer_failure" -> "error"
+                                "printer_failure", "light_failure", "power_outage" -> "error"
                                 "low_toner", "low_paper" -> "warning"
+                                "light_on", "light_off", "brightness_changed" -> "info"
                                 else -> "info"
                             }
                         )

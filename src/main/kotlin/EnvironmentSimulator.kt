@@ -35,6 +35,12 @@ class EnvironmentSimulator(
     // Tracking sprawdzonych przedziałów czasowych dla generowania spotkań
     // roomId -> Set<String> gdzie String to "YYYY-MM-DDTHH:MM" (początek przedziału 30-minutowego)
     private val checkedTimeSlots = mutableMapOf<String, MutableSet<String>>()
+    
+    // Tracking pobytu osób w pokojach
+    // roomId -> czas do którego osoby zostaną w pokoju (null = brak osób)
+    private val peopleStayUntil = mutableMapOf<String, LocalDateTime?>()
+    // roomId -> aktualna liczba osób
+    private val currentPeopleCount = mutableMapOf<String, Int>()
 
     /**
      * Zwraca aktualny stan środowiska (wszystkie pokoje, urządzenia, parametry)
@@ -105,61 +111,101 @@ class EnvironmentSimulator(
 
     /**
      * Symuluje ruch ludzi w pokojach na podstawie godzin pracy
-     * Prawdopodobieństwo wykrycia ruchu zależy od pory dnia (wyższe w godzinach pracy 8-16)
-     * Liczba osób w pokoju: 1-4 gdy wykryto ruch, 0 gdy brak ruchu
+     * Osoby zostają w pokoju przez 10-45 minut symulacji (realistyczny czas pobytu)
+     * Prawdopodobieństwo przyjścia nowych osób zależy od pory dnia
      */
     private fun updatePeopleMovement(currentTime: LocalDateTime) {
         val hour = currentTime.hour
-        val isWorkingHours = hour in 8..16
+        val isWorkingHours = hour in 8..17
 
         currentState.rooms.forEach { room ->
-            val baseProbability =
-                if (isWorkingHours) {
-                    when (hour) {
-                        in 8..10 -> 0.3
-                        in 10..12 -> 0.4
-                        in 12..14 -> 0.2
-                        in 14..16 -> 0.3
-                        else -> 0.1
-                    }
-                } else {
-                    0.05
+            val stayUntil = peopleStayUntil[room.id]
+            val currentCount = currentPeopleCount[room.id] ?: 0
+            
+            // Sprawdź czy osoby powinny opuścić pokój
+            val shouldLeave = stayUntil != null && currentTime.isAfter(stayUntil)
+            
+            // Prawdopodobieństwo że nowe osoby przyjdą (tylko jeśli pokój pusty lub losowo dojdą)
+            val arrivalProbability = if (isWorkingHours) {
+                when (hour) {
+                    in 8..9 -> 0.15    // Poranne przychodzenie
+                    in 9..12 -> 0.08   // Przedpołudnie - rzadziej
+                    in 12..13 -> 0.05  // Przerwa obiadowa
+                    in 13..16 -> 0.08  // Popołudnie
+                    in 16..17 -> 0.03  // Koniec pracy
+                    else -> 0.02
                 }
-
-            val motionDetected = random.nextDouble() < baseProbability
-            val peopleCount =
-                if (motionDetected) {
-                    random.nextInt(4) + 1 // 1-4 osoby
+            } else {
+                0.01 // Poza godzinami pracy - bardzo rzadko
+            }
+            
+            var newPeopleCount = currentCount
+            var motionDetected = currentCount > 0
+            
+            if (shouldLeave) {
+                // Część osób wychodzi (losowo 50-100% osób)
+                val leavingRatio = 0.5 + random.nextDouble() * 0.5
+                val leaving = (currentCount * leavingRatio).toInt()
+                newPeopleCount = max(0, currentCount - max(1, leaving))
+                
+                if (newPeopleCount > 0) {
+                    // Część osób zostaje - przedłuż czas pobytu o 5-15 minut
+                    val extraStay = 5 + random.nextInt(11) // 5-15 minut
+                    peopleStayUntil[room.id] = currentTime.plusMinutes(extraStay.toLong())
                 } else {
-                    0
+                    peopleStayUntil[room.id] = null
                 }
-
-            val updatedSensor =
-                room.motionSensor.copy(
-                    motionDetected = motionDetected,
-                    lastMotionTime = if (motionDetected) currentTime.format(formatter) else room.motionSensor.lastMotionTime,
-                )
-
-            val updatedRoom =
-                room.copy(
-                    motionSensor = updatedSensor,
-                    peopleCount = peopleCount,
-                )
-
-            val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
-            currentState = currentState.copy(rooms = updatedRooms)
-
-            if (motionDetected) {
+            }
+            
+            // Nowe osoby mogą przyjść
+            if (random.nextDouble() < arrivalProbability) {
+                val newArrivals = 1 + random.nextInt(3) // 1-3 nowe osoby
+                newPeopleCount += newArrivals
+                newPeopleCount = min(8, newPeopleCount) // Max 8 osób w pokoju
+                
+                // Ustal czas pobytu: 10-45 minut symulacji
+                val stayDuration = 10 + random.nextInt(36) // 10-45 minut
+                val newStayUntil = currentTime.plusMinutes(stayDuration.toLong())
+                
+                // Weź późniejszy czas jeśli ktoś już był
+                val existingStay = peopleStayUntil[room.id]
+                if (existingStay == null || newStayUntil.isAfter(existingStay)) {
+                    peopleStayUntil[room.id] = newStayUntil
+                }
+                
+                motionDetected = true
+                
                 events.add(
                     EnvironmentEvent(
                         type = "motion",
                         roomId = room.id,
-                        deviceId = updatedSensor.id,
+                        deviceId = room.motionSensor.id,
                         timestamp = currentTime.format(formatter),
-                        description = "Wykryto ruch w sali ${room.name}",
+                        description = "Wykryto ruch w sali ${room.name} ($newArrivals os. przyszło)",
                     ),
                 )
             }
+            
+            // Zapisz aktualny stan
+            currentPeopleCount[room.id] = newPeopleCount
+            
+            // Generuj zdarzenia ruchu gdy są ludzie (symulacja czujnika)
+            if (newPeopleCount > 0 && random.nextDouble() < 0.3) {
+                motionDetected = true
+            }
+
+            val updatedSensor = room.motionSensor.copy(
+                motionDetected = motionDetected,
+                lastMotionTime = if (motionDetected) currentTime.format(formatter) else room.motionSensor.lastMotionTime,
+            )
+
+            val updatedRoom = room.copy(
+                motionSensor = updatedSensor,
+                peopleCount = newPeopleCount,
+            )
+
+            val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
+            currentState = currentState.copy(rooms = updatedRooms)
         }
     }
 
@@ -315,21 +361,22 @@ class EnvironmentSimulator(
 
     /**
      * Aktualizuje stany urządzeń w pokojach na podstawie wykrytego ruchu
-     * - Światła: włączają się automatycznie przy wykryciu ruchu, wyłączają po braku ruchu
+     * - Światła: NIE są sterowane automatycznie - zarządza nimi LightAgent
+     *   (tylko wyłączane przy awarii zasilania lub gdy zepsute)
      * - Drukarki: włączają się z 50% prawdopodobieństwem przy wykryciu ruchu (tylko jeśli zasoby > 0), wyłączają po braku ruchu
      * - Zużywa zasoby drukarki gdy jest włączona (toner i papier)
      * - Jeśli jeden zasób = 0%, drugi przestaje się zużywać
      */
     private fun updateDeviceStates(currentTime: LocalDateTime) {
         currentState.rooms.forEach { room ->
+            // Światła NIE są automatycznie sterowane - tylko reagują na awarie
+            // LightAgent ma pełną kontrolę nad światłami
             val updatedLights =
                 room.lights.map { light ->
-                    if (light.state == DeviceState.BROKEN || powerOutage) {
+                    if (light.state == DeviceState.BROKEN) {
                         light.copy(state = DeviceState.OFF)
-                    } else if (room.motionSensor.motionDetected && light.state == DeviceState.OFF) {
-                        light.copy(state = DeviceState.ON)
-                    } else if (!room.motionSensor.motionDetected && light.state == DeviceState.ON) {
-                        // Wyłącz po 5 minutach bez ruchu
+                    } else if (powerOutage && light.state == DeviceState.ON) {
+                        // Tylko wyłącz przy awarii zasilania
                         light.copy(state = DeviceState.OFF)
                     } else {
                         light
@@ -773,6 +820,78 @@ class EnvironmentSimulator(
      */
     fun getPrinter(printerId: String): PrinterDevice? {
         return currentState.rooms.find { it.printer?.id == printerId }?.printer
+    }
+    
+    /**
+     * Zwraca światło o podanym ID
+     * @return LightDevice jeśli znaleziono, null w przeciwnym razie
+     */
+    fun getLight(lightId: String): LightDevice? {
+        currentState.rooms.forEach { room ->
+            room.lights.find { it.id == lightId }?.let { return it }
+        }
+        return null
+    }
+    
+    /**
+     * Ustawia stan światła (ON/OFF)
+     * @return true jeśli operacja się powiodła, false jeśli światło nie zostało znalezione lub jest zepsute
+     */
+    fun setLightState(lightId: String, state: DeviceState, brightness: Int? = null): Boolean {
+        currentState.rooms.forEach { room ->
+            val lightIndex = room.lights.indexOfFirst { it.id == lightId }
+            if (lightIndex >= 0) {
+                val light = room.lights[lightIndex]
+                
+                // Nie można włączyć zepsutego światła
+                if (light.state == DeviceState.BROKEN && state == DeviceState.ON) {
+                    return false
+                }
+                
+                // Nie można włączyć gdy awaria zasilania
+                if (powerOutage && state == DeviceState.ON) {
+                    return false
+                }
+                
+                val newBrightness = brightness ?: light.brightness
+                val clampedBrightness = max(0, min(100, newBrightness))
+                
+                val updatedLight = light.copy(
+                    state = state,
+                    brightness = clampedBrightness
+                )
+                val updatedLights = room.lights.toMutableList()
+                updatedLights[lightIndex] = updatedLight
+                val updatedRoom = room.copy(lights = updatedLights)
+                val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
+                currentState = currentState.copy(rooms = updatedRooms)
+                return true
+            }
+        }
+        return false
+    }
+    
+    /**
+     * Ustawia jasność światła (0-100)
+     * @return true jeśli operacja się powiodła, false jeśli światło nie zostało znalezione
+     */
+    fun setLightBrightness(lightId: String, brightness: Int): Boolean {
+        currentState.rooms.forEach { room ->
+            val lightIndex = room.lights.indexOfFirst { it.id == lightId }
+            if (lightIndex >= 0) {
+                val light = room.lights[lightIndex]
+                val clampedBrightness = max(0, min(100, brightness))
+                
+                val updatedLight = light.copy(brightness = clampedBrightness)
+                val updatedLights = room.lights.toMutableList()
+                updatedLights[lightIndex] = updatedLight
+                val updatedRoom = room.copy(lights = updatedLights)
+                val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
+                currentState = currentState.copy(rooms = updatedRooms)
+                return true
+            }
+        }
+        return false
     }
 }
 
