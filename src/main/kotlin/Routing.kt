@@ -349,58 +349,90 @@ fun Application.configureRouting() {
                             ?: return@post call.respond(mapOf("error" to "Simulator not initialized"))
                     
                     try {
-                        val request = call.receive<Map<String, Any>>()
-                        val action = request["action"] as? String
+                        val request = call.receive<PrinterControlRequest>()
+                        val action = request.action
+                        
+                        if (printerId.isNullOrBlank()) {
+                            return@post call.respond(
+                                status = io.ktor.http.HttpStatusCode.BadRequest,
+                                mapOf("success" to "false", "error" to "Printer ID is required")
+                            )
+                        }
                         
                         when (action) {
                             "turn_on" -> {
-                                val success = simulator.setPrinterState(printerId ?: "", DeviceState.ON)
-                                if (success) {
-                                    call.respond(mapOf("success" to true, "message" to "Printer turned on"))
-                                } else {
-                                    call.respond(mapOf("success" to false, "error" to "Printer not found"))
+                                try {
+                                    val success = simulator.setPrinterState(printerId, DeviceState.ON)
+                                    if (success) {
+                                        call.respond(mapOf("success" to "true", "message" to "Printer turned on"))
+                                    } else {
+                                        val printer = simulator.getPrinter(printerId)
+                                        val errorMsg = if (printer == null) {
+                                            "Printer not found"
+                                        } else if (printer.tonerLevel == 0 || printer.paperLevel == 0) {
+                                            "Cannot turn on: insufficient resources (toner: ${printer.tonerLevel}%, paper: ${printer.paperLevel}%)"
+                                        } else {
+                                            "Unknown error"
+                                        }
+                                        call.respond(
+                                            status = io.ktor.http.HttpStatusCode.BadRequest,
+                                            mapOf("success" to "false", "error" to errorMsg)
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    println("Error in turn_on: ${e.message}")
+                                    e.printStackTrace()
+                                    call.respond(
+                                        status = io.ktor.http.HttpStatusCode.InternalServerError,
+                                        mapOf("success" to "false", "error" to "Internal server error: ${e.message}")
+                                    )
                                 }
                             }
                             "turn_off" -> {
                                 val success = simulator.setPrinterState(printerId ?: "", DeviceState.OFF)
                                 if (success) {
-                                    call.respond(mapOf("success" to true, "message" to "Printer turned off"))
+                                    call.respond(mapOf("success" to "true", "message" to "Printer turned off"))
                                 } else {
-                                    call.respond(mapOf("success" to false, "error" to "Printer not found"))
+                                    call.respond(mapOf("success" to "false", "error" to "Printer not found"))
                                 }
                             }
                             "set_toner" -> {
-                                val level = (request["level"] as? Number)?.toInt()
+                                val level = request.level
                                 if (level != null) {
                                     val success = simulator.setPrinterTonerLevel(printerId ?: "", level)
                                     if (success) {
-                                        call.respond(mapOf("success" to true, "message" to "Toner level set to $level"))
+                                        call.respond(mapOf("success" to "true", "message" to "Toner level set to $level"))
                                     } else {
-                                        call.respond(mapOf("success" to false, "error" to "Printer not found"))
+                                        call.respond(mapOf("success" to "false", "error" to "Printer not found"))
                                     }
                                 } else {
-                                    call.respond(mapOf("success" to false, "error" to "Invalid toner level"))
+                                    call.respond(mapOf("success" to "false", "error" to "Invalid toner level"))
                                 }
                             }
                             "set_paper" -> {
-                                val level = (request["level"] as? Number)?.toInt()
+                                val level = request.level
                                 if (level != null) {
                                     val success = simulator.setPrinterPaperLevel(printerId ?: "", level)
                                     if (success) {
-                                        call.respond(mapOf("success" to true, "message" to "Paper level set to $level"))
+                                        call.respond(mapOf("success" to "true", "message" to "Paper level set to $level"))
                                     } else {
-                                        call.respond(mapOf("success" to false, "error" to "Printer not found"))
+                                        call.respond(mapOf("success" to "false", "error" to "Printer not found"))
                                     }
                                 } else {
-                                    call.respond(mapOf("success" to false, "error" to "Invalid paper level"))
+                                    call.respond(mapOf("success" to "false", "error" to "Invalid paper level"))
                                 }
                             }
                             else -> {
-                                call.respond(mapOf("success" to false, "error" to "Unknown action: $action"))
+                                call.respond(mapOf("success" to "false", "error" to "Unknown action: $action"))
                             }
                         }
                     } catch (e: Exception) {
-                        call.respond(mapOf("success" to false, "error" to e.message))
+                        println("ERROR in printer control endpoint: ${e.message}")
+                        e.printStackTrace()
+                        call.respond(
+                            status = io.ktor.http.HttpStatusCode.InternalServerError,
+                            mapOf("success" to "false", "error" to (e.message ?: "Unknown error"), "type" to e.javaClass.simpleName)
+                        )
                     }
                 }
             }
@@ -422,7 +454,7 @@ fun Application.configureRouting() {
                     try {
                         val request = call.receive<Map<String, Any>>()
                         val alertType = request["type"] as? String ?: return@post call.respond(
-                            mapOf("success" to false, "error" to "Missing alert type")
+                            mapOf("success" to "false", "error" to "Missing alert type")
                         )
                         @Suppress("UNCHECKED_CAST")
                         val data = request["data"] as? Map<String, Any> ?: emptyMap<String, Any>()
@@ -504,11 +536,11 @@ fun Application.configureRouting() {
                         
                         simulator.addAlert(alert)
                         
-                        call.respond(mapOf("success" to true, "alert_id" to alert.id))
+                        call.respond(mapOf("success" to "true", "alert_id" to alert.id))
                     } catch (e: Exception) {
                         println("Error adding alert: ${e.message}")
                         e.printStackTrace()
-                        call.respond(mapOf("success" to false, "error" to (e.message ?: "Unknown error")))
+                        call.respond(mapOf("success" to "false", "error" to (e.message ?: "Unknown error")))
                     }
                 }
             }

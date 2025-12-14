@@ -106,3 +106,9 @@ data class Alert(
     val severity: String = "warning" // "info", "warning", "error"
 )
 
+@Serializable
+data class PrinterControlRequest(
+    val action: String,
+    val level: Int? = null
+)
+
