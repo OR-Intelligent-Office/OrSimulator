@@ -292,7 +292,6 @@ fun Application.configureRouting() {
                         val bodyText = call.receiveText()
                         println("Blinds control request for $blindsId: $bodyText")
                         
-                        // Prosty parsing JSON (identycznie jak dla światła)
                         val stateMatch = Regex(""""state"\s*:\s*"(\w+)"""").find(bodyText)
                         val stateStr = stateMatch?.groupValues?.get(1)
                         
