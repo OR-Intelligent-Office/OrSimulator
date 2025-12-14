@@ -316,7 +316,7 @@ class EnvironmentSimulator(
     /**
      * Aktualizuje stany urządzeń w pokojach na podstawie wykrytego ruchu
      * - Światła: włączają się automatycznie przy wykryciu ruchu, wyłączają po braku ruchu
-     * - Drukarki: włączają się przy wykryciu ruchu (tylko jeśli zasoby > 0), wyłączają po braku ruchu
+     * - Drukarki: włączają się z 50% prawdopodobieństwem przy wykryciu ruchu (tylko jeśli zasoby > 0), wyłączają po braku ruchu
      * - Zużywa zasoby drukarki gdy jest włączona (toner i papier)
      * - Jeśli jeden zasób = 0%, drugi przestaje się zużywać
      */
@@ -337,13 +337,18 @@ class EnvironmentSimulator(
                 }
 
             // Automatyczne włączanie/wyłączanie drukarki na podstawie ruchu
+            // Drukarka włącza się z 50% prawdopodobieństwem przy wykryciu ruchu
             val updatedPrinter = room.printer?.let { printer ->
                 if (printer.state == DeviceState.BROKEN || powerOutage) {
                     printer.copy(state = DeviceState.OFF)
                 } else if (room.motionSensor.motionDetected && printer.state == DeviceState.OFF) {
-                    // Włącz tylko jeśli zasoby są dostępne
+                    // Włącz tylko jeśli zasoby są dostępne i z 50% prawdopodobieństwem
                     if (printer.tonerLevel > 0 && printer.paperLevel > 0) {
-                        printer.copy(state = DeviceState.ON)
+                        if (random.nextDouble() < 0.5) {
+                            printer.copy(state = DeviceState.ON)
+                        } else {
+                            printer.copy(state = DeviceState.OFF)
+                        }
                     } else {
                         printer.copy(state = DeviceState.OFF)
                     }
