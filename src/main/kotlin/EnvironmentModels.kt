@@ -56,6 +56,13 @@ data class BlindsDevice(
 )
 
 @Serializable
+data class Meeting(
+    val startTime: String, // LocalDateTime jako string
+    val endTime: String, // LocalDateTime jako string
+    val title: String = "Spotkanie"
+)
+
+@Serializable
 data class Room(
     val id: String,
     val name: String,
@@ -64,7 +71,8 @@ data class Room(
     val motionSensor: MotionSensor,
     val temperatureSensor: TemperatureSensor,
     val blinds: BlindsDevice?,
-    val peopleCount: Int = 0
+    val peopleCount: Int = 0,
+    val scheduledMeetings: List<Meeting> = emptyList()
 )
 
 @Serializable

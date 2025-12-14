@@ -31,6 +31,10 @@ class EnvironmentSimulator(
     // Tracking czasu dla automatycznego uzupełniania zasobów (po godzinie symulacji)
     private val tonerDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
     private val paperDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
+    
+    // Tracking sprawdzonych przedziałów czasowych dla generowania spotkań
+    // roomId -> Set<String> gdzie String to "YYYY-MM-DDTHH:MM" (początek przedziału 30-minutowego)
+    private val checkedTimeSlots = mutableMapOf<String, MutableSet<String>>()
 
     /**
      * Zwraca aktualny stan środowiska (wszystkie pokoje, urządzenia, parametry)
@@ -96,6 +100,7 @@ class EnvironmentSimulator(
         generateRandomEvents(currentSimulationTime)
         updateDeviceStates(currentSimulationTime)
         replenishPrinterResources()
+        updateScheduledMeetings(currentSimulationTime)
     }
 
     /**
@@ -459,6 +464,155 @@ class EnvironmentSimulator(
     }
 
     /**
+     * Aktualizuje zaplanowane spotkania dla wszystkich pokoi
+     * Generuje spotkania na maksymalnie 1 dzień roboczy do przodu
+     * Prawdopodobieństwo: 50% w godzinach roboczych (8-16), 20% w godzinach wieczornych (16-22), 0% w nocy (22-8)
+     * Każdy przedział czasowy (30 minut) jest sprawdzany tylko raz
+     */
+    private fun updateScheduledMeetings(currentTime: LocalDateTime) {
+        val updatedRooms = currentState.rooms.map { room ->
+            val roomCheckedSlots = checkedTimeSlots.getOrPut(room.id) { mutableSetOf() }
+            val allMeetings = mutableListOf<Meeting>()
+            
+            // Pobierz istniejące spotkania które jeszcze nie minęły i są w zakresie 1 dnia roboczego
+            val existingMeetings = room.scheduledMeetings.filter { meeting ->
+                val endTime = LocalDateTime.parse(meeting.endTime, formatter)
+                val isInFuture = endTime.isAfter(currentTime)
+                val isWithinWorkingDay = isWithinOneWorkingDay(currentTime, endTime)
+                isInFuture && isWithinWorkingDay
+            }
+            allMeetings.addAll(existingMeetings)
+            
+            // Oblicz zakres czasowy do sprawdzenia (od teraz do 1 dnia roboczego do przodu)
+            val endCheckTime = getOneWorkingDayForward(currentTime)
+            
+            // Sprawdź każdy przedział 30-minutowy w zakresie
+            var checkTime = currentTime
+            // Zaokrąglij do najbliższego 30-minutowego przedziału
+            val currentMinute = checkTime.minute
+            val roundedMinute = (currentMinute / 30) * 30
+            checkTime = checkTime.withMinute(roundedMinute).withSecond(0).withNano(0)
+            
+            while (checkTime.isBefore(endCheckTime) || checkTime.isEqual(endCheckTime)) {
+                val timeSlotKey = checkTime.format(formatter)
+                
+                // Sprawdź tylko jeśli ten przedział nie był jeszcze sprawdzony
+                if (!roomCheckedSlots.contains(timeSlotKey)) {
+                    val hour = checkTime.hour
+                    val probability = when {
+                        hour in 8..15 -> 0.5  // Godziny robocze: 8-16 (8:00-15:59)
+                        hour in 16..21 -> 0.2 // Godziny wieczorne: 16-22 (16:00-21:59)
+                        else -> 0.0           // Noc: 22-7 (22:00-7:59)
+                    }
+                    
+                    // Sprawdź czy nie ma już spotkania w tym przedziale
+                    val hasOverlap = allMeetings.any { meeting ->
+                        val meetingStart = LocalDateTime.parse(meeting.startTime, formatter)
+                        val meetingEnd = LocalDateTime.parse(meeting.endTime, formatter)
+                        checkTime.isBefore(meetingEnd) && checkTime.plusMinutes(30).isAfter(meetingStart)
+                    }
+                    
+                    if (!hasOverlap && random.nextDouble() < probability) {
+                        val meetingStart = checkTime
+                        val meetingEnd = checkTime.plusMinutes(30)
+                        allMeetings.add(
+                            Meeting(
+                                startTime = meetingStart.format(formatter),
+                                endTime = meetingEnd.format(formatter),
+                                title = "Spotkanie"
+                            )
+                        )
+                    }
+                    
+                    // Oznacz przedział jako sprawdzony
+                    roomCheckedSlots.add(timeSlotKey)
+                }
+                
+                // Przejdź do następnego przedziału 30-minutowego
+                checkTime = checkTime.plusMinutes(30)
+            }
+            
+            // Usuń stare wpisy z checkedTimeSlots (starsze niż 2 dni)
+            val twoDaysAgo = currentTime.minusDays(2)
+            roomCheckedSlots.removeIf { slotTime ->
+                try {
+                    val slot = LocalDateTime.parse(slotTime, formatter)
+                    slot.isBefore(twoDaysAgo)
+                } catch (e: Exception) {
+                    true // Usuń nieprawidłowe wpisy
+                }
+            }
+            
+            // Sortuj spotkania według czasu rozpoczęcia
+            val sortedMeetings = allMeetings.sortedBy { LocalDateTime.parse(it.startTime, formatter) }
+            
+            room.copy(scheduledMeetings = sortedMeetings)
+        }
+        
+        currentState = currentState.copy(rooms = updatedRooms)
+    }
+    
+    /**
+     * Sprawdza czy podany czas jest w zakresie 1 dnia roboczego do przodu od czasu bazowego
+     * Dzień roboczy: poniedziałek-piątek
+     */
+    private fun isWithinOneWorkingDay(baseTime: LocalDateTime, checkTime: LocalDateTime): Boolean {
+        if (checkTime.isBefore(baseTime) || checkTime.isEqual(baseTime)) {
+            return false
+        }
+        
+        // Znajdź następny dzień roboczy od baseTime
+        var nextWorkingDay = baseTime
+        var workingDaysAdded = 0
+        
+        // Jeśli jesteśmy w trakcie dnia roboczego (pon-pt), dodaj 1 dzień roboczy
+        if (nextWorkingDay.dayOfWeek.value in 1..5) {
+            workingDaysAdded = 1
+            // Przejdź do końca tego dnia
+            nextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
+        }
+        
+        // Przejdź do następnego dnia roboczego
+        while (workingDaysAdded < 1) {
+            nextWorkingDay = nextWorkingDay.plusDays(1)
+            if (nextWorkingDay.dayOfWeek.value in 1..5) {
+                workingDaysAdded++
+            }
+        }
+        
+        // Sprawdź czy checkTime jest przed końcem następnego dnia roboczego
+        val endOfNextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
+        return checkTime.isBefore(endOfNextWorkingDay) || checkTime.isEqual(endOfNextWorkingDay)
+    }
+    
+    /**
+     * Zwraca czas końca 1 dnia roboczego do przodu od podanego czasu
+     * Dzień roboczy: poniedziałek-piątek
+     */
+    private fun getOneWorkingDayForward(baseTime: LocalDateTime): LocalDateTime {
+        var nextWorkingDay = baseTime
+        var workingDaysAdded = 0
+        
+        // Jeśli jesteśmy w trakcie dnia roboczego (pon-pt), dodaj 1 dzień roboczy
+        if (nextWorkingDay.dayOfWeek.value in 1..5) {
+            workingDaysAdded = 1
+            // Przejdź do końca tego dnia
+            nextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
+        }
+        
+        // Przejdź do końca następnego dnia roboczego
+        while (workingDaysAdded < 1) {
+            nextWorkingDay = nextWorkingDay.plusDays(1)
+            if (nextWorkingDay.dayOfWeek.value in 1..5) {
+                workingDaysAdded++
+            }
+        }
+        
+        // Zwróć koniec dnia (23:59:59)
+        return nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
+    }
+
+    /**
      * Tworzy początkowy stan środowiska na podstawie konfiguracji pokoi
      * Inicjalizuje wszystkie urządzenia w stanie OFF, losowe poziomy zasobów drukarek (50-100%)
      */
@@ -506,6 +660,7 @@ class EnvironmentSimulator(
                             state = BlindState.CLOSED,
                         ),
                     peopleCount = 0,
+                    scheduledMeetings = emptyList(),
                 )
             }
 
