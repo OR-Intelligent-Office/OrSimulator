@@ -5,8 +5,11 @@ import io.ktor.server.resources.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.http.ContentType
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.seconds
+import com.agh.BlindState
+import com.agh.DeviceState
 
 /**
  * Singleton zarządzający instancją symulatora środowiska
@@ -259,6 +262,67 @@ fun Application.configureRouting() {
                         println("Error in light control: ${e.message}")
                         e.printStackTrace()
                         call.respond(mapOf("success" to false, "error" to (e.message ?: "Unknown error")))
+                    }
+                }
+            }
+            
+            // Endpointy kontroli rolet
+            route("/devices/blinds/{blindsId}") {
+                get {
+                    val blindsId = call.parameters["blindsId"]
+                    val simulator =
+                        SimulatorManager.getSimulator()
+                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    
+                    val blinds = simulator.getBlinds(blindsId ?: "")
+                    if (blinds != null) {
+                        call.respond(blinds)
+                    } else {
+                        call.respond(mapOf("error" to "Blinds not found"))
+                    }
+                }
+
+                post("/control") {
+                    val blindsId = call.parameters["blindsId"] ?: ""
+                    val simulator =
+                        SimulatorManager.getSimulator()
+                            ?: return@post call.respondText("""{"success":false,"error":"Simulator not initialized"}""", contentType = ContentType.Application.Json)
+                    
+                    try {
+                        val bodyText = call.receiveText()
+                        println("Blinds control request for $blindsId: $bodyText")
+                        
+                        // Prosty parsing JSON (identycznie jak dla światła)
+                        val stateMatch = Regex(""""state"\s*:\s*"(\w+)"""").find(bodyText)
+                        val stateStr = stateMatch?.groupValues?.get(1)
+                        
+                        println("Parsed - state: $stateStr")
+                        
+                        when (stateStr?.uppercase()) {
+                            "OPEN" -> {
+                                val success = simulator.setBlindsState(blindsId, BlindState.OPEN)
+                                if (success) {
+                                    call.respondText("""{"success":true,"message":"Blinds opened"}""", contentType = ContentType.Application.Json)
+                                } else {
+                                    call.respondText("""{"success":false,"error":"Blinds not found"}""", contentType = ContentType.Application.Json)
+                                }
+                            }
+                            "CLOSED" -> {
+                                val success = simulator.setBlindsState(blindsId, BlindState.CLOSED)
+                                if (success) {
+                                    call.respondText("""{"success":true,"message":"Blinds closed"}""", contentType = ContentType.Application.Json)
+                                } else {
+                                    call.respondText("""{"success":false,"error":"Blinds not found"}""", contentType = ContentType.Application.Json)
+                                }
+                            }
+                            else -> {
+                                call.respondText("""{"success":false,"error":"Missing or invalid state: $stateStr"}""", contentType = ContentType.Application.Json)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("Error in blinds control: ${e.message}")
+                        e.printStackTrace()
+                        call.respondText("""{"success":false,"error":"${e.message ?: "Unknown error"}"}""", contentType = ContentType.Application.Json)
                     }
                 }
             }

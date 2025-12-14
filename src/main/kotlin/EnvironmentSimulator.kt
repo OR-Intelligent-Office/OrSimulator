@@ -893,6 +893,31 @@ class EnvironmentSimulator(
         }
         return false
     }
+    
+    /**
+     * Ustawia stan rolet (OPEN/CLOSED)
+     * @return true jeśli operacja się powiodła, false jeśli rolety nie zostały znalezione
+     */
+    fun setBlindsState(blindsId: String, state: BlindState): Boolean {
+        currentState.rooms.forEach { room ->
+            if (room.blinds?.id == blindsId) {
+                val updatedBlinds = room.blinds.copy(state = state)
+                val updatedRoom = room.copy(blinds = updatedBlinds)
+                val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
+                currentState = currentState.copy(rooms = updatedRooms)
+                return true
+            }
+        }
+        return false
+    }
+    
+    /**
+     * Zwraca rolety o podanym ID
+     * @return BlindsDevice jeśli znaleziono, null w przeciwnym razie
+     */
+    fun getBlinds(blindsId: String): BlindsDevice? {
+        return currentState.rooms.find { it.blinds?.id == blindsId }?.blinds
+    }
 }
 
 data class RoomConfig(
