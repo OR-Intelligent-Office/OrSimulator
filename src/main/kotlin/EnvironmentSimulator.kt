@@ -383,78 +383,21 @@ class EnvironmentSimulator(
                     }
                 }
 
-            // Automatyczne włączanie/wyłączanie drukarki na podstawie ruchu
-            // Drukarka włącza się z 50% prawdopodobieństwem przy wykryciu ruchu
+            // Printers are controlled by agents - simulator only turns off on failures
             val updatedPrinter = room.printer?.let { printer ->
                 if (printer.state == DeviceState.BROKEN || powerOutage) {
                     printer.copy(state = DeviceState.OFF)
-                } else if (room.motionSensor.motionDetected && printer.state == DeviceState.OFF) {
-                    // Włącz tylko jeśli zasoby są dostępne i z 50% prawdopodobieństwem
-                    if (printer.tonerLevel > 0 && printer.paperLevel > 0) {
-                        if (random.nextDouble() < 0.5) {
-                            printer.copy(state = DeviceState.ON)
-                        } else {
-                            printer.copy(state = DeviceState.OFF)
-                        }
-                    } else {
-                        printer.copy(state = DeviceState.OFF)
-                    }
-                } else if (!room.motionSensor.motionDetected && printer.state == DeviceState.ON) {
+                } else if (printer.state == DeviceState.ON && (printer.tonerLevel == 0 || printer.paperLevel == 0)) {
+                    // Automatically turn off if no resources (agent cannot turn on without resources)
                     printer.copy(state = DeviceState.OFF)
                 } else {
+                    // Leave printer state unchanged - controlled by agent via API
                     printer
                 }
             }
 
-            // Zużywanie zasobów drukarki gdy jest włączona
-            val finalPrinter = updatedPrinter?.let { printer ->
-                if (printer.state == DeviceState.ON && !powerOutage) {
-                    // Jeśli jeden zasób = 0%, drugi przestaje się zużywać
-                    val canConsumeToner = printer.tonerLevel > 0 && printer.paperLevel > 0
-                    val canConsumePaper = printer.tonerLevel > 0 && printer.paperLevel > 0
-                    
-                    // Intensywność zużycia zależy od obecności ludzi w pokoju
-                    val baseConsumption = if (room.peopleCount > 0) 1.0 else 0.3
-                    
-                    // Zużycie: 0.5-1.5% tonera i 1.0-2.5% papieru na minutę symulacji
-                    val tonerConsumption = if (canConsumeToner) {
-                        (random.nextDouble() * 1.0 + 0.5) * baseConsumption
-                    } else {
-                        0.0
-                    }
-                    val paperConsumption = if (canConsumePaper) {
-                        (random.nextDouble() * 1.5 + 1.0) * baseConsumption
-                    } else {
-                        0.0
-                    }
-                    
-                    val newTonerLevel = max(0, (printer.tonerLevel - tonerConsumption).toInt())
-                    val newPaperLevel = max(0, (printer.paperLevel - paperConsumption).toInt())
-                    
-                    // Zapisz czas wyczerpania zasobów dla automatycznego uzupełniania
-                    if (newTonerLevel == 0 && printer.tonerLevel > 0) {
-                        tonerDepletedAt[printer.id] = currentTime
-                    }
-                    if (newPaperLevel == 0 && printer.paperLevel > 0) {
-                        paperDepletedAt[printer.id] = currentTime
-                    }
-                    
-                    // Wyłącz drukarkę jeśli zasoby się wyczerpały
-                    val newState = if (newTonerLevel == 0 || newPaperLevel == 0) {
-                        DeviceState.OFF
-                    } else {
-                        printer.state
-                    }
-                    
-                    printer.copy(
-                        state = newState,
-                        tonerLevel = newTonerLevel,
-                        paperLevel = newPaperLevel
-                    )
-                } else {
-                    printer
-                }
-            }
+            // Resource consumption is controlled by agent - simulator does not consume automatically
+            val finalPrinter = updatedPrinter
             
             val updatedRoom = room.copy(
                 lights = updatedLights,
@@ -755,6 +698,17 @@ class EnvironmentSimulator(
         val room = currentState.rooms.find { it.printer?.id == printerId }
         val printer = room?.printer ?: return false
 
+        // Cannot turn on broken printer
+        if (state == DeviceState.ON && printer.state == DeviceState.BROKEN) {
+            return false
+        }
+
+        // Cannot turn on printer during power outage
+        if (state == DeviceState.ON && powerOutage) {
+            return false
+        }
+
+        // Cannot turn on printer without resources
         if (state == DeviceState.ON && (printer.tonerLevel == 0 || printer.paperLevel == 0)) {
             return false
         }
@@ -900,8 +854,9 @@ class EnvironmentSimulator(
      */
     fun setBlindsState(blindsId: String, state: BlindState): Boolean {
         currentState.rooms.forEach { room ->
-            if (room.blinds?.id == blindsId) {
-                val updatedBlinds = room.blinds.copy(state = state)
+            val blinds = room.blinds
+            if (blinds?.id == blindsId) {
+                val updatedBlinds = blinds.copy(state = state)
                 val updatedRoom = room.copy(blinds = updatedBlinds)
                 val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
                 currentState = currentState.copy(rooms = updatedRooms)

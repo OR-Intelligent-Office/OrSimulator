@@ -367,12 +367,13 @@ fun Application.configureRouting() {
                                         call.respond(mapOf("success" to "true", "message" to "Printer turned on"))
                                     } else {
                                         val printer = simulator.getPrinter(printerId)
-                                        val errorMsg = if (printer == null) {
-                                            "Printer not found"
-                                        } else if (printer.tonerLevel == 0 || printer.paperLevel == 0) {
-                                            "Cannot turn on: insufficient resources (toner: ${printer.tonerLevel}%, paper: ${printer.paperLevel}%)"
-                                        } else {
-                                            "Unknown error"
+                                        val errorMsg = when {
+                                            printer == null -> "Printer not found"
+                                            printer.state == DeviceState.BROKEN -> "Cannot turn on: printer is broken"
+                                            simulator.getCurrentState().powerOutage -> "Cannot turn on: power outage"
+                                            printer.tonerLevel == 0 || printer.paperLevel == 0 -> 
+                                                "Cannot turn on: insufficient resources (toner: ${printer.tonerLevel}%, paper: ${printer.paperLevel}%)"
+                                            else -> "Unknown error"
                                         }
                                         call.respond(
                                             status = io.ktor.http.HttpStatusCode.BadRequest,
