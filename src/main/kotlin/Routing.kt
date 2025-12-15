@@ -6,59 +6,45 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.seconds
-import com.agh.BlindState
-import com.agh.DeviceState
 
 /**
  * Singleton zarządzający instancją symulatora środowiska
- * Inicjalizuje symulator i uruchamia cykliczne aktualizacje w tle
  */
 object SimulatorManager {
     private var simulator: EnvironmentSimulator? = null
     private var updateJob: Job? = null
 
-    /**
-     * Inicjalizuje symulator i uruchamia aktualizacje w tle
-     * Aktualizacja odbywa się co sekundę rzeczywistą (co minutę symulacji)
-     */
     fun initialize(
         application: Application,
         startBackgroundUpdates: Boolean = true,
     ) {
         if (simulator == null) {
-            simulator =
-                EnvironmentSimulator(
-                    rooms = defaultRooms(),
-                    timeSpeedMultiplier = 1.0,
-                    failureProbability = 0.01,
-                )
+            simulator = EnvironmentSimulator(
+                rooms = defaultRooms(),
+                timeSpeedMultiplier = 1.0,
+                failureProbability = 0.01,
+            )
 
             if (startBackgroundUpdates) {
-                updateJob =
-                    CoroutineScope(Dispatchers.Default).launch {
-                        try {
-                            while (isActive) {
-                                simulator?.update(deltaMinutes = 1.0)
-                                delay(1.seconds)
-                            }
-                        } catch (e: Exception) {
-                            // Ignoruj błędy w tle
+                updateJob = CoroutineScope(Dispatchers.Default).launch {
+                    try {
+                        while (isActive) {
+                            simulator?.update(deltaMinutes = 1.0)
+                            delay(1.seconds)
                         }
+                    } catch (e: Exception) {
+                        // Ignoruj błędy w tle
                     }
+                }
             }
         }
     }
 
-    /**
-     * Zwraca instancję symulatora
-     */
     fun getSimulator(): EnvironmentSimulator? = simulator
 
-    /**
-     * Zatrzymuje aktualizacje w tle
-     */
     fun stop() {
         updateJob?.cancel()
         updateJob = null
@@ -67,132 +53,114 @@ object SimulatorManager {
 
 fun Application.configureRouting() {
     install(Resources)
-
     SimulatorManager.initialize(this)
 
     routing {
         get("/") {
-            call.respondText("Hello World!")
+            call.respondText("OR Simulator API")
         }
 
         route("/api/environment") {
             get("/state") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 call.respond(simulator.getCurrentState())
             }
 
             get("/events") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 call.respond(simulator.getEvents())
             }
 
             get("/rooms") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 call.respond(simulator.getCurrentState().rooms)
             }
 
             get("/rooms/{roomId}") {
                 val roomId = call.parameters["roomId"]
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
+                
                 val room = simulator.getCurrentState().rooms.find { it.id == roomId }
                 if (room != null) {
                     call.respond(room)
                 } else {
-                    call.respond(mapOf("error" to "Room not found"))
+                    call.respond(HttpStatusCode.NotFound, ErrorResponse("Room not found"))
                 }
             }
 
             get("/temperature") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 val state = simulator.getCurrentState()
-                call.respond(
-                    mapOf(
-                        "externalTemperature" to state.externalTemperature,
-                        "rooms" to
-                            state.rooms.map { room ->
-                                mapOf(
-                                    "roomId" to room.id,
-                                    "roomName" to room.name,
-                                    "temperature" to room.temperatureSensor.temperature,
-                                )
-                            },
-                    ),
-                )
+                call.respond(TemperatureResponse(
+                    externalTemperature = state.externalTemperature,
+                    rooms = state.rooms.map { room ->
+                        RoomTemperature(
+                            roomId = room.id,
+                            roomName = room.name,
+                            temperature = room.temperatureSensor.temperature
+                        )
+                    }
+                ))
             }
 
             get("/motion") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 val state = simulator.getCurrentState()
-                call.respond(
-                    state.rooms.map { room ->
-                        mapOf(
-                            "roomId" to room.id,
-                            "roomName" to room.name,
-                            "motionDetected" to room.motionSensor.motionDetected,
-                            "peopleCount" to room.peopleCount,
-                            "lastMotionTime" to room.motionSensor.lastMotionTime,
-                        )
-                    },
-                )
+                call.respond(state.rooms.map { room ->
+                    RoomMotion(
+                        roomId = room.id,
+                        roomName = room.name,
+                        motionDetected = room.motionSensor.motionDetected,
+                        peopleCount = room.peopleCount,
+                        lastMotionTime = room.motionSensor.lastMotionTime
+                    )
+                })
             }
 
             get("/devices") {
-                val simulator =
-                    SimulatorManager.getSimulator()
-                        ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                val simulator = SimulatorManager.getSimulator()
+                    ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                 val state = simulator.getCurrentState()
-                val allDevices = mutableListOf<Map<String, Any>>()
+                val allDevices = mutableListOf<DeviceInfo>()
 
                 state.rooms.forEach { room ->
                     room.lights.forEach { light ->
-                        allDevices.add(
-                            mapOf(
-                                "id" to light.id,
-                                "type" to "light",
-                                "roomId" to room.id,
-                                "roomName" to room.name,
-                                "state" to light.state.name,
-                                "brightness" to light.brightness,
-                            ),
-                        )
+                        allDevices.add(DeviceInfo(
+                            id = light.id,
+                            type = "light",
+                            roomId = room.id,
+                            roomName = room.name,
+                            state = light.state.name,
+                            brightness = light.brightness
+                        ))
                     }
 
                     room.printer?.let { printer ->
-                        allDevices.add(
-                            mapOf(
-                                "id" to printer.id,
-                                "type" to "printer",
-                                "roomId" to room.id,
-                                "roomName" to room.name,
-                                "state" to printer.state.name,
-                                "tonerLevel" to printer.tonerLevel,
-                                "paperLevel" to printer.paperLevel,
-                            ),
-                        )
+                        allDevices.add(DeviceInfo(
+                            id = printer.id,
+                            type = "printer",
+                            roomId = room.id,
+                            roomName = room.name,
+                            state = printer.state.name,
+                            tonerLevel = printer.tonerLevel,
+                            paperLevel = printer.paperLevel
+                        ))
                     }
 
                     room.blinds?.let { blinds ->
-                        allDevices.add(
-                            mapOf(
-                                "id" to blinds.id,
-                                "type" to "blinds",
-                                "roomId" to room.id,
-                                "roomName" to room.name,
-                                "state" to blinds.state.name,
-                            ),
-                        )
+                        allDevices.add(DeviceInfo(
+                            id = blinds.id,
+                            type = "blinds",
+                            roomId = room.id,
+                            roomName = room.name,
+                            state = blinds.state.name
+                        ))
                     }
                 }
 
@@ -203,29 +171,26 @@ fun Application.configureRouting() {
             route("/devices/light/{lightId}") {
                 get {
                     val lightId = call.parameters["lightId"]
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                     
                     val light = simulator.getLight(lightId ?: "")
                     if (light != null) {
                         call.respond(light)
                     } else {
-                        call.respond(mapOf("error" to "Light not found"))
+                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Light not found"))
                     }
                 }
 
                 post("/control") {
                     val lightId = call.parameters["lightId"] ?: ""
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@post call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
                     
                     try {
                         val bodyText = call.receiveText()
                         println("Light control request for $lightId: $bodyText")
                         
-                        // Prosty parsing JSON
                         val stateMatch = Regex(""""state"\s*:\s*"(\w+)"""").find(bodyText)
                         val brightnessMatch = Regex(""""brightness"\s*:\s*(\d+)""").find(bodyText)
                         
@@ -238,30 +203,28 @@ fun Application.configureRouting() {
                             "ON" -> {
                                 val success = simulator.setLightState(lightId, DeviceState.ON, brightness)
                                 if (success) {
-                                    call.respond(mapOf(
-                                        "success" to true, 
-                                        "message" to "Light turned on" + (brightness?.let { " with brightness $it%" } ?: "")
-                                    ))
+                                    val msg = "Light turned on" + (brightness?.let { " with brightness $it%" } ?: "")
+                                    call.respond(ApiResponse(true, message = msg))
                                 } else {
-                                    call.respond(mapOf("success" to false, "error" to "Light not found or broken"))
+                                    call.respond(ApiResponse(false, error = "Light not found or broken"))
                                 }
                             }
                             "OFF" -> {
                                 val success = simulator.setLightState(lightId, DeviceState.OFF)
                                 if (success) {
-                                    call.respond(mapOf("success" to true, "message" to "Light turned off"))
+                                    call.respond(ApiResponse(true, message = "Light turned off"))
                                 } else {
-                                    call.respond(mapOf("success" to false, "error" to "Light not found"))
+                                    call.respond(ApiResponse(false, error = "Light not found"))
                                 }
                             }
                             else -> {
-                                call.respond(mapOf("success" to false, "error" to "Missing or invalid state: $state"))
+                                call.respond(ApiResponse(false, error = "Missing or invalid state: $state"))
                             }
                         }
                     } catch (e: Exception) {
                         println("Error in light control: ${e.message}")
                         e.printStackTrace()
-                        call.respond(mapOf("success" to false, "error" to (e.message ?: "Unknown error")))
+                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
                     }
                 }
             }
@@ -270,23 +233,21 @@ fun Application.configureRouting() {
             route("/devices/blinds/{blindsId}") {
                 get {
                     val blindsId = call.parameters["blindsId"]
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                     
                     val blinds = simulator.getBlinds(blindsId ?: "")
                     if (blinds != null) {
                         call.respond(blinds)
                     } else {
-                        call.respond(mapOf("error" to "Blinds not found"))
+                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Blinds not found"))
                     }
                 }
 
                 post("/control") {
                     val blindsId = call.parameters["blindsId"] ?: ""
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@post call.respondText("""{"success":false,"error":"Simulator not initialized"}""", contentType = ContentType.Application.Json)
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
                     
                     try {
                         val bodyText = call.receiveText()
@@ -301,27 +262,27 @@ fun Application.configureRouting() {
                             "OPEN" -> {
                                 val success = simulator.setBlindsState(blindsId, BlindState.OPEN)
                                 if (success) {
-                                    call.respondText("""{"success":true,"message":"Blinds opened"}""", contentType = ContentType.Application.Json)
+                                    call.respond(ApiResponse(true, message = "Blinds opened"))
                                 } else {
-                                    call.respondText("""{"success":false,"error":"Blinds not found"}""", contentType = ContentType.Application.Json)
+                                    call.respond(ApiResponse(false, error = "Blinds not found"))
                                 }
                             }
                             "CLOSED" -> {
                                 val success = simulator.setBlindsState(blindsId, BlindState.CLOSED)
                                 if (success) {
-                                    call.respondText("""{"success":true,"message":"Blinds closed"}""", contentType = ContentType.Application.Json)
+                                    call.respond(ApiResponse(true, message = "Blinds closed"))
                                 } else {
-                                    call.respondText("""{"success":false,"error":"Blinds not found"}""", contentType = ContentType.Application.Json)
+                                    call.respond(ApiResponse(false, error = "Blinds not found"))
                                 }
                             }
                             else -> {
-                                call.respondText("""{"success":false,"error":"Missing or invalid state: $stateStr"}""", contentType = ContentType.Application.Json)
+                                call.respond(ApiResponse(false, error = "Missing or invalid state: $stateStr"))
                             }
                         }
                     } catch (e: Exception) {
                         println("Error in blinds control: ${e.message}")
                         e.printStackTrace()
-                        call.respondText("""{"success":false,"error":"${e.message ?: "Unknown error"}"}""", contentType = ContentType.Application.Json)
+                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
                     }
                 }
             }
@@ -330,172 +291,146 @@ fun Application.configureRouting() {
             route("/devices/printer/{printerId}") {
                 get {
                     val printerId = call.parameters["printerId"]
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                     
                     val printer = simulator.getPrinter(printerId ?: "")
                     if (printer != null) {
                         call.respond(printer)
                     } else {
-                        call.respond(mapOf("error" to "Printer not found"))
+                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Printer not found"))
                     }
                 }
 
                 post("/control") {
-                    val printerId = call.parameters["printerId"]
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@post call.respond(mapOf("error" to "Simulator not initialized"))
+                    val printerId = call.parameters["printerId"] ?: ""
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
                     
                     try {
-                        val request = call.receive<PrinterControlRequest>()
-                        val action = request.action
+                        val bodyText = call.receiveText()
+                        println("Printer control request for $printerId: $bodyText")
                         
-                        if (printerId.isNullOrBlank()) {
-                            return@post call.respond(
-                                status = io.ktor.http.HttpStatusCode.BadRequest,
-                                mapOf("success" to "false", "error" to "Printer ID is required")
-                            )
-                        }
+                        val actionMatch = Regex(""""action"\s*:\s*"(\w+)"""").find(bodyText)
+                        val levelMatch = Regex(""""level"\s*:\s*(\d+)""").find(bodyText)
+                        
+                        val action = actionMatch?.groupValues?.get(1)
+                        val level = levelMatch?.groupValues?.get(1)?.toIntOrNull()
+                        
+                        println("Parsed - action: $action, level: $level")
                         
                         when (action) {
                             "turn_on" -> {
-                                try {
-                                    val success = simulator.setPrinterState(printerId, DeviceState.ON)
-                                    if (success) {
-                                        call.respond(mapOf("success" to "true", "message" to "Printer turned on"))
-                                    } else {
-                                        val printer = simulator.getPrinter(printerId)
-                                        val errorMsg = when {
-                                            printer == null -> "Printer not found"
-                                            printer.state == DeviceState.BROKEN -> "Cannot turn on: printer is broken"
-                                            simulator.getCurrentState().powerOutage -> "Cannot turn on: power outage"
-                                            printer.tonerLevel == 0 || printer.paperLevel == 0 -> 
-                                                "Cannot turn on: insufficient resources (toner: ${printer.tonerLevel}%, paper: ${printer.paperLevel}%)"
-                                            else -> "Unknown error"
-                                        }
-                                        call.respond(
-                                            status = io.ktor.http.HttpStatusCode.BadRequest,
-                                            mapOf("success" to "false", "error" to errorMsg)
-                                        )
+                                val success = simulator.setPrinterState(printerId, DeviceState.ON)
+                                if (success) {
+                                    call.respond(ApiResponse(true, message = "Printer turned on"))
+                                } else {
+                                    val printer = simulator.getPrinter(printerId)
+                                    val errorMsg = when {
+                                        printer == null -> "Printer not found"
+                                        printer.state == DeviceState.BROKEN -> "Cannot turn on: printer is broken"
+                                        simulator.getCurrentState().powerOutage -> "Cannot turn on: power outage"
+                                        printer.tonerLevel == 0 || printer.paperLevel == 0 -> 
+                                            "Cannot turn on: insufficient resources"
+                                        else -> "Unknown error"
                                     }
-                                } catch (e: Exception) {
-                                    println("Error in turn_on: ${e.message}")
-                                    e.printStackTrace()
-                                    call.respond(
-                                        status = io.ktor.http.HttpStatusCode.InternalServerError,
-                                        mapOf("success" to "false", "error" to "Internal server error: ${e.message}")
-                                    )
+                                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, error = errorMsg))
                                 }
                             }
                             "turn_off" -> {
-                                val success = simulator.setPrinterState(printerId ?: "", DeviceState.OFF)
+                                val success = simulator.setPrinterState(printerId, DeviceState.OFF)
                                 if (success) {
-                                    call.respond(mapOf("success" to "true", "message" to "Printer turned off"))
+                                    call.respond(ApiResponse(true, message = "Printer turned off"))
                                 } else {
-                                    call.respond(mapOf("success" to "false", "error" to "Printer not found"))
+                                    call.respond(ApiResponse(false, error = "Printer not found"))
                                 }
                             }
                             "set_toner" -> {
-                                val level = request.level
                                 if (level != null) {
-                                    val success = simulator.setPrinterTonerLevel(printerId ?: "", level)
+                                    val success = simulator.setPrinterTonerLevel(printerId, level)
                                     if (success) {
-                                        call.respond(mapOf("success" to "true", "message" to "Toner level set to $level"))
+                                        call.respond(ApiResponse(true, message = "Toner level set to $level"))
                                     } else {
-                                        call.respond(mapOf("success" to "false", "error" to "Printer not found"))
+                                        call.respond(ApiResponse(false, error = "Printer not found"))
                                     }
                                 } else {
-                                    call.respond(mapOf("success" to "false", "error" to "Invalid toner level"))
+                                    call.respond(ApiResponse(false, error = "Invalid toner level"))
                                 }
                             }
                             "set_paper" -> {
-                                val level = request.level
                                 if (level != null) {
-                                    val success = simulator.setPrinterPaperLevel(printerId ?: "", level)
+                                    val success = simulator.setPrinterPaperLevel(printerId, level)
                                     if (success) {
-                                        call.respond(mapOf("success" to "true", "message" to "Paper level set to $level"))
+                                        call.respond(ApiResponse(true, message = "Paper level set to $level"))
                                     } else {
-                                        call.respond(mapOf("success" to "false", "error" to "Printer not found"))
+                                        call.respond(ApiResponse(false, error = "Printer not found"))
                                     }
                                 } else {
-                                    call.respond(mapOf("success" to "false", "error" to "Invalid paper level"))
+                                    call.respond(ApiResponse(false, error = "Invalid paper level"))
                                 }
                             }
                             else -> {
-                                call.respond(mapOf("success" to "false", "error" to "Unknown action: $action"))
+                                call.respond(ApiResponse(false, error = "Unknown action: $action"))
                             }
                         }
                     } catch (e: Exception) {
-                        println("ERROR in printer control endpoint: ${e.message}")
+                        println("Error in printer control: ${e.message}")
                         e.printStackTrace()
-                        call.respond(
-                            status = io.ktor.http.HttpStatusCode.InternalServerError,
-                            mapOf("success" to "false", "error" to (e.message ?: "Unknown error"), "type" to e.javaClass.simpleName)
-                        )
+                        call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = e.message ?: "Unknown error"))
                     }
                 }
             }
             
-            // Endpointy alertów od agentów
+            // Endpointy alertów
             route("/alerts") {
                 get {
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@get call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                     call.respond(simulator.getAlerts())
                 }
                 
                 post {
-                    val simulator =
-                        SimulatorManager.getSimulator()
-                            ?: return@post call.respond(mapOf("error" to "Simulator not initialized"))
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
                     
                     try {
-                        val request = call.receive<Map<String, Any>>()
-                        val alertType = request["type"] as? String ?: return@post call.respond(
-                            mapOf("success" to "false", "error" to "Missing alert type")
-                        )
-                        @Suppress("UNCHECKED_CAST")
-                        val data = request["data"] as? Map<String, Any> ?: emptyMap<String, Any>()
+                        val bodyText = call.receiveText()
+                        println("Alert request: $bodyText")
                         
-                        // Obsługa alertów drukarek
-                        val printerId = data["printer_id"] as? String ?: ""
-                        val lightId = data["light_id"] as? String ?: ""
-                        val roomName = data["room"] as? String ?: data["room_name"] as? String ?: ""
+                        // Parsowanie JSON ręcznie
+                        val typeMatch = Regex(""""type"\s*:\s*"([^"]+)"""").find(bodyText)
+                        val alertType = typeMatch?.groupValues?.get(1) ?: "unknown"
                         
+                        val printerIdMatch = Regex(""""printer_id"\s*:\s*"([^"]+)"""").find(bodyText)
+                        val printerId = printerIdMatch?.groupValues?.get(1) ?: ""
+                        
+                        val lightIdMatch = Regex(""""light_id"\s*:\s*"([^"]+)"""").find(bodyText)
+                        val lightId = lightIdMatch?.groupValues?.get(1) ?: ""
+                        
+                        val roomMatch = Regex(""""room"\s*:\s*"([^"]+)"""").find(bodyText)
+                        val roomFromRequest = roomMatch?.groupValues?.get(1) ?: ""
+                        
+                        val messageMatch = Regex(""""message"\s*:\s*"([^"]+)"""").find(bodyText)
+                        val customMessage = messageMatch?.groupValues?.get(1) ?: ""
+                        
+                        val tonerMatch = Regex(""""toner_level"\s*:\s*(\d+)""").find(bodyText)
+                        val tonerLevel = tonerMatch?.groupValues?.get(1) ?: "0"
+                        
+                        val paperMatch = Regex(""""paper_level"\s*:\s*(\d+)""").find(bodyText)
+                        val paperLevel = paperMatch?.groupValues?.get(1) ?: "0"
+                        
+                        // Znajdź pokój
                         val room = when {
                             printerId.isNotEmpty() -> simulator.getCurrentState().rooms.find { 
                                 it.printer?.id == printerId 
                             }
-                            lightId.isNotEmpty() -> simulator.getCurrentState().rooms.find { room ->
-                                room.lights.any { it.id == lightId }
+                            lightId.isNotEmpty() -> simulator.getCurrentState().rooms.find { r ->
+                                r.lights.any { it.id == lightId }
                             }
-                            roomName.isNotEmpty() -> simulator.getCurrentState().rooms.find {
-                                it.name == roomName
+                            roomFromRequest.isNotEmpty() -> simulator.getCurrentState().rooms.find {
+                                it.name == roomFromRequest
                             }
                             else -> null
-                        }
-                        
-                        val tonerLevelValue = data.get("toner_level")
-                        val paperLevelValue = data.get("paper_level")
-                        val brightnessValue = data.get("brightness")
-                        
-                        val tonerLevel = when {
-                            tonerLevelValue is Number -> tonerLevelValue.toString()
-                            tonerLevelValue is String -> tonerLevelValue
-                            else -> "0"
-                        }
-                        val paperLevel = when {
-                            paperLevelValue is Number -> paperLevelValue.toString()
-                            paperLevelValue is String -> paperLevelValue
-                            else -> "0"
-                        }
-                        val brightness = when {
-                            brightnessValue is Number -> brightnessValue.toString()
-                            brightnessValue is String -> brightnessValue
-                            else -> ""
                         }
                         
                         val deviceId = when {
@@ -509,20 +444,16 @@ fun Application.configureRouting() {
                             type = alertType,
                             printerId = deviceId,
                             roomId = room?.id,
-                            roomName = room?.name ?: roomName,
-                            message = when (alertType) {
-                                // Alerty drukarek
-                                "low_toner" -> "Niski poziom tonera w drukarence ${printerId}: ${tonerLevel}%"
-                                "low_paper" -> "Niski poziom papieru w drukarence ${printerId}: ${paperLevel}%"
-                                "printer_failure" -> "Awaria drukarki ${printerId} w sali ${room?.name ?: "nieznanej"}"
-                                // Alerty świateł
-                                "light_on" -> "Światło ${lightId} włączone w ${room?.name ?: roomName}" + 
-                                    (if (brightness.isNotEmpty()) " (jasność: ${brightness}%)" else "")
-                                "light_off" -> "Światło ${lightId} wyłączone w ${room?.name ?: roomName}"
-                                "brightness_changed" -> "Zmiana jasności ${lightId} na ${brightness}% w ${room?.name ?: roomName}"
-                                "light_failure" -> "Awaria światła ${lightId} w ${room?.name ?: roomName}"
-                                "power_outage" -> "Awaria zasilania - urządzenia niedostępne"
-                                else -> data["message"] as? String ?: "Alert: $alertType"
+                            roomName = room?.name ?: roomFromRequest,
+                            message = when {
+                                customMessage.isNotEmpty() -> customMessage
+                                alertType == "low_toner" -> "Niski poziom tonera w drukarce $printerId: $tonerLevel%"
+                                alertType == "low_paper" -> "Niski poziom papieru w drukarce $printerId: $paperLevel%"
+                                alertType == "printer_failure" -> "Awaria drukarki $printerId w sali ${room?.name ?: "nieznanej"}"
+                                alertType == "light_failure" -> "Awaria światła $lightId w ${room?.name ?: roomFromRequest}"
+                                alertType == "light_repaired" -> "Światło $lightId w ${room?.name ?: roomFromRequest} naprawione"
+                                alertType == "power_outage" -> "Awaria zasilania - urządzenia niedostępne"
+                                else -> "Alert: $alertType"
                             },
                             timestamp = java.time.LocalDateTime.now().format(
                                 java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME
@@ -530,18 +461,19 @@ fun Application.configureRouting() {
                             severity = when (alertType) {
                                 "printer_failure", "light_failure", "power_outage" -> "error"
                                 "low_toner", "low_paper" -> "warning"
-                                "light_on", "light_off", "brightness_changed" -> "info"
+                                "light_repaired" -> "info"
                                 else -> "info"
                             }
                         )
                         
                         simulator.addAlert(alert)
+                        println("Alert dodany: ${alert.type} - ${alert.message}")
+                        call.respond(ApiResponse(true, alertId = alert.id))
                         
-                        call.respond(mapOf("success" to "true", "alert_id" to alert.id))
                     } catch (e: Exception) {
                         println("Error adding alert: ${e.message}")
                         e.printStackTrace()
-                        call.respond(mapOf("success" to "false", "error" to (e.message ?: "Unknown error")))
+                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
                     }
                 }
             }

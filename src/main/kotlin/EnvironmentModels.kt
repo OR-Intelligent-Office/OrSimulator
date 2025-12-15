@@ -112,3 +112,51 @@ data class PrinterControlRequest(
     val level: Int? = null
 )
 
+// Odpowiedzi API
+@Serializable
+data class ApiResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val error: String? = null,
+    val alertId: String? = null
+)
+
+@Serializable
+data class ErrorResponse(
+    val error: String
+)
+
+@Serializable
+data class TemperatureResponse(
+    val externalTemperature: Double,
+    val rooms: List<RoomTemperature>
+)
+
+@Serializable
+data class RoomTemperature(
+    val roomId: String,
+    val roomName: String,
+    val temperature: Double
+)
+
+@Serializable
+data class RoomMotion(
+    val roomId: String,
+    val roomName: String,
+    val motionDetected: Boolean,
+    val peopleCount: Int,
+    val lastMotionTime: String?
+)
+
+@Serializable
+data class DeviceInfo(
+    val id: String,
+    val type: String,
+    val roomId: String,
+    val roomName: String,
+    val state: String,
+    val brightness: Int? = null,
+    val tonerLevel: Int? = null,
+    val paperLevel: Int? = null
+)
+
