@@ -212,17 +212,33 @@ class EnvironmentSimulator(
 
     /**
      * Aktualizuje temperatury w pokojach
-     * Temperatura dąży do wartości docelowej (22°C jeśli ogrzewanie włączone, temperatura zewnętrzna jeśli wyłączone)
+     * Jeśli ogrzewanie włączone: temperatura dąży do 22°C (może się ogrzewać lub chłodzić)
+     * Jeśli ogrzewanie wyłączone: temperatura może tylko się chłodzić w kierunku temperatury zewnętrznej (nie może się ogrzewać)
      * Zawiera losowy szum i jest ograniczona do zakresu 15-28°C
      */
     private fun updateTemperatures() {
-        val targetTemperature = if (heatingOn) 22.0 else externalTemperature
-
         currentState.rooms.forEach { room ->
             val currentTemp = room.temperatureSensor.temperature
-            val tempDiff = targetTemperature - currentTemp
             val noise = random.nextDouble() * 1.0 - 0.5
-            val newTemp = currentTemp + tempDiff * 0.1 + noise
+            val newTemp: Double
+
+            if (heatingOn) {
+                // Ogrzewanie włączone: dąż do 22°C (może się ogrzewać lub chłodzić)
+                val targetTemperature = 22.0
+                val tempDiff = targetTemperature - currentTemp
+                newTemp = currentTemp + tempDiff * 0.1 + noise
+            } else {
+                // Ogrzewanie wyłączone: tylko chłodzenie w kierunku temperatury zewnętrznej
+                // Jeśli pokój jest cieplejszy niż zewnętrzna, chłodź się
+                // Jeśli pokój jest chłodniejszy niż zewnętrzna, nie ogrzewaj (tylko szum)
+                if (currentTemp > externalTemperature) {
+                    val tempDiff = externalTemperature - currentTemp
+                    newTemp = currentTemp + tempDiff * 0.1 + noise
+                } else {
+                    // Pokój jest chłodniejszy niż zewnętrzna - nie ogrzewaj, tylko dodaj szum
+                    newTemp = currentTemp + noise
+                }
+            }
 
             val clampedTemp = max(15.0, min(28.0, newTemp))
 
