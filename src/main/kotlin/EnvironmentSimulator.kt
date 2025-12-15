@@ -98,6 +98,7 @@ class EnvironmentSimulator(
                 timeSpeedMultiplier = timeSpeedMultiplier,
                 powerOutage = powerOutage,
                 daylightIntensity = daylightIntensity,
+                isHeating = heatingOn,
             )
 
         updatePeopleMovement(currentSimulationTime)
@@ -666,6 +667,7 @@ class EnvironmentSimulator(
             timeSpeedMultiplier = timeSpeedMultiplier,
             powerOutage = false,
             daylightIntensity = 1.0,
+            isHeating = heatingOn,
         )
     }
 

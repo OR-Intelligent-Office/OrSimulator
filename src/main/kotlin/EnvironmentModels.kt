@@ -82,7 +82,8 @@ data class EnvironmentState(
     val externalTemperature: Double,
     val timeSpeedMultiplier: Double = 1.0,
     val powerOutage: Boolean = false,
-    val daylightIntensity: Double = 1.0 // 0.0-1.0
+    val daylightIntensity: Double = 1.0, // 0.0-1.0
+    val isHeating: Boolean = false
 )
 
 @Serializable

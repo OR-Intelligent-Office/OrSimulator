@@ -477,6 +477,49 @@ fun Application.configureRouting() {
                     }
                 }
             }
+            
+            // Endpointy kontroli ogrzewania
+            route("/heating") {
+                get {
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
+                    val state = simulator.getCurrentState()
+                    call.respond(mapOf("isHeating" to state.isHeating))
+                }
+                
+                post("/control") {
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
+                    
+                    try {
+                        val bodyText = call.receiveText()
+                        println("Heating control request: $bodyText")
+                        
+                        val isHeatingMatch = Regex(""""isHeating"\s*:\s*(true|false)""").find(bodyText)
+                        val isHeatingStr = isHeatingMatch?.groupValues?.get(1)
+                        
+                        println("Parsed - isHeating: $isHeatingStr")
+                        
+                        when (isHeatingStr) {
+                            "true" -> {
+                                simulator.setHeating(true)
+                                call.respond(ApiResponse(true, message = "Heating turned on"))
+                            }
+                            "false" -> {
+                                simulator.setHeating(false)
+                                call.respond(ApiResponse(true, message = "Heating turned off"))
+                            }
+                            else -> {
+                                call.respond(ApiResponse(false, error = "Missing or invalid isHeating: $isHeatingStr"))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("Error in heating control: ${e.message}")
+                        e.printStackTrace()
+                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
+                    }
+                }
+            }
         }
     }
 }
