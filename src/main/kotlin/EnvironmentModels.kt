@@ -82,8 +82,7 @@ data class EnvironmentState(
     val externalTemperature: Double,
     val timeSpeedMultiplier: Double = 1.0,
     val powerOutage: Boolean = false,
-    val daylightIntensity: Double = 1.0, // 0.0-1.0
-    val isHeating: Boolean = false
+    val daylightIntensity: Double = 1.0 // 0.0-1.0
 )
 
 @Serializable
@@ -111,6 +110,17 @@ data class Alert(
 data class PrinterControlRequest(
     val action: String,
     val level: Int? = null
+)
+
+@Serializable
+data class HeatingControlRequest(
+    val isHeating: Boolean
+)
+
+@Serializable
+data class RoomHeatingResponse(
+    val roomId: String,
+    val isHeating: Boolean
 )
 
 // Odpowiedzi API
@@ -173,12 +183,12 @@ enum class MessageType {
 @Serializable
 data class AgentMessage(
     val id: String,
-    val from: String,  // "heating_agent", "printer_agent_208", etc.
-    val to: String,    // "heating_agent", "blinds_agent", "broadcast", etc.
+    val from: String,  // ID agenta wysyłającego
+    val to: String,    // ID agenta docelowego lub "broadcast"
     val type: MessageType,
-    val content: String,   // Tekst w języku naturalnym
-    val timestamp: String,
-    val context: Map<String, String>? = null  // {"room": "208", "temperature": "20.5"}
+    val content: String,   // Treść wiadomości w języku naturalnym
+    val timestamp: String, // ISO_LOCAL_DATE_TIME
+    val context: Map<String, String>? = null // Dodatkowy kontekst
 )
 
 @Serializable
@@ -189,4 +199,3 @@ data class AgentMessageRequest(
     val content: String,
     val context: Map<String, String>? = null
 )
-
