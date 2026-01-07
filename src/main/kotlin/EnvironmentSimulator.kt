@@ -28,6 +28,10 @@ class EnvironmentSimulator(
     // Alerty od agentów
     private val alerts = mutableListOf<Alert>()
     
+    // Komunikaty NL między agentami
+    private val agentMessages = mutableListOf<AgentMessage>()
+    private var messageIdCounter = 0L
+    
     // Tracking czasu dla automatycznego uzupełniania zasobów (po godzinie symulacji)
     private val tonerDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
     private val paperDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
@@ -80,6 +84,58 @@ class EnvironmentSimulator(
      */
     fun clearAlerts() {
         alerts.clear()
+    }
+    
+    /**
+     * Dodaje wiadomość NL od agenta
+     * Przechowuje maksymalnie 200 ostatnich wiadomości
+     */
+    fun addAgentMessage(message: AgentMessage) {
+        agentMessages.add(message)
+        if (agentMessages.size > 200) {
+            agentMessages.removeAt(0)
+        }
+    }
+    
+    /**
+     * Zwraca wszystkie wiadomości dla konkretnego agenta (gdzie to=agentId lub from=agentId)
+     */
+    fun getMessagesForAgent(agentId: String): List<AgentMessage> {
+        return agentMessages.filter { 
+            it.to == agentId || it.from == agentId || it.to == "broadcast"
+        }
+    }
+    
+    /**
+     * Zwraca wszystkie wiadomości
+     */
+    fun getAllMessages(): List<AgentMessage> = agentMessages.toList()
+    
+    /**
+     * Zwraca nowe wiadomości dla agenta (po określonym czasie)
+     */
+    fun getNewMessagesForAgent(agentId: String, afterTimestamp: String?): List<AgentMessage> {
+        if (afterTimestamp == null) {
+            return getMessagesForAgent(agentId)
+        }
+        return agentMessages.filter { 
+            (it.to == agentId || it.to == "broadcast") && it.timestamp > afterTimestamp
+        }
+    }
+    
+    /**
+     * Czyści listę wiadomości
+     */
+    fun clearMessages() {
+        agentMessages.clear()
+    }
+    
+    /**
+     * Generuje unikalne ID dla wiadomości
+     */
+    fun generateMessageId(): String {
+        messageIdCounter++
+        return "msg_${System.currentTimeMillis()}_$messageIdCounter"
     }
 
     /**

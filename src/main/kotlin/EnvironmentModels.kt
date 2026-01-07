@@ -161,3 +161,32 @@ data class DeviceInfo(
     val paperLevel: Int? = null
 )
 
+// Komunikacja NL między agentami
+@Serializable
+enum class MessageType {
+    REQUEST,   // Prośba o akcję
+    INFORM,    // Informacja
+    QUERY,     // Zapytanie
+    RESPONSE   // Odpowiedź
+}
+
+@Serializable
+data class AgentMessage(
+    val id: String,
+    val from: String,  // "heating_agent", "printer_agent_208", etc.
+    val to: String,    // "heating_agent", "blinds_agent", "broadcast", etc.
+    val type: MessageType,
+    val content: String,   // Tekst w języku naturalnym
+    val timestamp: String,
+    val context: Map<String, String>? = null  // {"room": "208", "temperature": "20.5"}
+)
+
+@Serializable
+data class AgentMessageRequest(
+    val from: String,
+    val to: String,
+    val type: MessageType,
+    val content: String,
+    val context: Map<String, String>? = null
+)
+

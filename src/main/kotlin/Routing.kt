@@ -520,6 +520,73 @@ fun Application.configureRouting() {
                     }
                 }
             }
+            
+            // Endpointy komunikacji NL między agentami
+            route("/agents/messages") {
+                post {
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
+                    
+                    try {
+                        val request = call.receive<AgentMessageRequest>()
+                        val messageId = simulator.generateMessageId()
+                        val timestamp = java.time.LocalDateTime.now().format(
+                            java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME
+                        )
+                        
+                        val message = AgentMessage(
+                            id = messageId,
+                            from = request.from,
+                            to = request.to,
+                            type = request.type,
+                            content = request.content,
+                            timestamp = timestamp,
+                            context = request.context
+                        )
+                        
+                        simulator.addAgentMessage(message)
+                        println("Agent message added: ${message.from} -> ${message.to}: ${message.content}")
+                        call.respond(ApiResponse(true, message = "Message sent", alertId = messageId))
+                    } catch (e: Exception) {
+                        println("Error adding agent message: ${e.message}")
+                        e.printStackTrace()
+                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
+                    }
+                }
+                
+                get {
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
+                    call.respond(simulator.getAllMessages())
+                }
+                
+                get("/{agentId}") {
+                    val agentId = call.parameters["agentId"]
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
+                    
+                    if (agentId != null) {
+                        val messages = simulator.getMessagesForAgent(agentId)
+                        call.respond(messages)
+                    } else {
+                        call.respond(HttpStatusCode.BadRequest, ErrorResponse("Agent ID required"))
+                    }
+                }
+                
+                get("/{agentId}/new") {
+                    val agentId = call.parameters["agentId"]
+                    val afterTimestamp = call.request.queryParameters["after"]
+                    val simulator = SimulatorManager.getSimulator()
+                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
+                    
+                    if (agentId != null) {
+                        val messages = simulator.getNewMessagesForAgent(agentId, afterTimestamp)
+                        call.respond(messages)
+                    } else {
+                        call.respond(HttpStatusCode.BadRequest, ErrorResponse("Agent ID required"))
+                    }
+                }
+            }
         }
     }
 }
