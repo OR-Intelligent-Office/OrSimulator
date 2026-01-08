@@ -507,6 +507,13 @@ fun Application.configureRouting() {
                             }
                             
                             val request = call.receive<HeatingControlRequest>()
+                            
+                            // Sprawdź czy jest awaria zasilania i próbujemy włączyć ogrzewanie
+                            if (request.isHeating && simulator.getCurrentState().powerOutage) {
+                                call.respond(ApiResponse(false, error = "Cannot turn on heating: power outage"))
+                                return@post
+                            }
+                            
                             val success = simulator.setRoomHeating(roomId, request.isHeating)
                             
                             if (success) {

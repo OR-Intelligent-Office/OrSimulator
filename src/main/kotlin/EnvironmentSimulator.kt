@@ -162,6 +162,14 @@ class EnvironmentSimulator(
             )
 
         updatePeopleMovement(currentSimulationTime)
+        
+        // Automatycznie wyłącz wszystkie ogrzewania przy awarii zasilania
+        if (powerOutage) {
+            roomHeating.keys.forEach { roomId ->
+                roomHeating[roomId] = false
+            }
+        }
+        
         updateTemperatures()
         checkDeviceFailures(currentSimulationTime)
         generateRandomEvents(currentSimulationTime)
@@ -801,17 +809,25 @@ class EnvironmentSimulator(
 
     /**
      * Włącza/wyłącza ogrzewanie dla konkretnego pokoju
+     * Nie pozwala włączyć ogrzewania podczas awarii zasilania
+     * @return true jeśli operacja się powiodła, false jeśli pokój nie został znaleziony lub awaria zasilania
      */
     fun setRoomHeating(
         roomId: String,
         on: Boolean,
     ): Boolean {
         val roomExists = currentState.rooms.any { it.id == roomId }
-        if (roomExists) {
-            roomHeating[roomId] = on
-            return true
+        if (!roomExists) {
+            return false
         }
-        return false
+        
+        // Nie można włączyć ogrzewania podczas awarii zasilania
+        if (on && powerOutage) {
+            return false
+        }
+        
+        roomHeating[roomId] = on
+        return true
     }
 
     /**
