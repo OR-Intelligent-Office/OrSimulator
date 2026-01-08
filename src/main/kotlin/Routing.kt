@@ -478,45 +478,59 @@ fun Application.configureRouting() {
                 }
             }
             
-            // Endpointy kontroli ogrzewania
+            // Endpointy kontroli ogrzewania (per pokój)
             route("/heating") {
-                get {
-                    val simulator = SimulatorManager.getSimulator()
-                        ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
-                    val state = simulator.getCurrentState()
-                    call.respond(mapOf("isHeating" to state.isHeating))
-                }
-                
-                post("/control") {
-                    val simulator = SimulatorManager.getSimulator()
-                        ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
-                    
-                    try {
-                        val bodyText = call.receiveText()
-                        println("Heating control request: $bodyText")
+                // Ogrzewanie per pokój
+                route("/rooms/{roomId}") {
+                    get {
+                        val roomId = call.parameters["roomId"]
+                        val simulator = SimulatorManager.getSimulator()
+                            ?: return@get call.respond(HttpStatusCode.InternalServerError, ErrorResponse("Simulator not initialized"))
                         
-                        val isHeatingMatch = Regex(""""isHeating"\s*:\s*(true|false)""").find(bodyText)
-                        val isHeatingStr = isHeatingMatch?.groupValues?.get(1)
-                        
-                        println("Parsed - isHeating: $isHeatingStr")
-                        
-                        when (isHeatingStr) {
-                            "true" -> {
-                                simulator.setHeating(true)
-                                call.respond(ApiResponse(true, message = "Heating turned on"))
-                            }
-                            "false" -> {
-                                simulator.setHeating(false)
-                                call.respond(ApiResponse(true, message = "Heating turned off"))
-                            }
-                            else -> {
-                                call.respond(ApiResponse(false, error = "Missing or invalid isHeating: $isHeatingStr"))
-                            }
+                        if (roomId != null) {
+                            val isHeating = simulator.getRoomHeating(roomId)
+                            call.respond(RoomHeatingResponse(roomId = roomId, isHeating = isHeating))
+                        } else {
+                            call.respond(HttpStatusCode.BadRequest, ErrorResponse("Room ID required"))
                         }
-                    } catch (e: Exception) {
-                        println("Error in heating control: ${e.message}")
-                        e.printStackTrace()
-                        call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
+                    }
+                    
+                    post("/control") {
+                        val roomId = call.parameters["roomId"]
+                        val simulator = SimulatorManager.getSimulator()
+                            ?: return@post call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, error = "Simulator not initialized"))
+                        
+                        try {
+                            if (roomId == null) {
+                                call.respond(ApiResponse(false, error = "Room ID required"))
+                                return@post
+                            }
+                            
+                            val request = call.receive<HeatingControlRequest>()
+                            
+                            // Sprawdź czy jest awaria zasilania i próbujemy włączyć ogrzewanie
+                            if (request.isHeating && simulator.getCurrentState().powerOutage) {
+                                call.respond(ApiResponse(false, error = "Cannot turn on heating: power outage"))
+                                return@post
+                            }
+                            
+                            val success = simulator.setRoomHeating(roomId, request.isHeating)
+                            
+                            if (success) {
+                                val message = if (request.isHeating) {
+                                    "Heating turned on for room $roomId"
+                                } else {
+                                    "Heating turned off for room $roomId"
+                                }
+                                call.respond(ApiResponse(true, message = message))
+                            } else {
+                                call.respond(ApiResponse(false, error = "Room not found"))
+                            }
+                        } catch (e: Exception) {
+                            println("Error in room heating control: ${e.message}")
+                            e.printStackTrace()
+                            call.respond(ApiResponse(false, error = e.message ?: "Unknown error"))
+                        }
                     }
                 }
             }

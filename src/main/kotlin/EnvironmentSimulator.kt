@@ -18,31 +18,34 @@ class EnvironmentSimulator(
 
     // Parametry symulacji
     private var externalTemperature: Double = 15.0 // temperatura zewnętrzna w stopniach C
-    private var heatingOn: Boolean = true
+
+    // Ogrzewanie per pokój: roomId -> czy ogrzewanie włączone
+    private val roomHeating = mutableMapOf<String, Boolean>()
     private var powerOutage: Boolean = false
     private var daylightIntensity: Double = 1.0
 
     // Generator zdarzeń
     private val events = mutableListOf<EnvironmentEvent>()
-    
+
     // Alerty od agentów
     private val alerts = mutableListOf<Alert>()
-    
+
     // Komunikaty NL między agentami
     private val agentMessages = mutableListOf<AgentMessage>()
     private var messageIdCounter = 0L
-    
+
     // Tracking czasu dla automatycznego uzupełniania zasobów (po godzinie symulacji)
     private val tonerDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
     private val paperDepletedAt = mutableMapOf<String, LocalDateTime>() // printerId -> czas symulacji wyczerpania
-    
+
     // Tracking sprawdzonych przedziałów czasowych dla generowania spotkań
     // roomId -> Set<String> gdzie String to "YYYY-MM-DDTHH:MM" (początek przedziału 30-minutowego)
     private val checkedTimeSlots = mutableMapOf<String, MutableSet<String>>()
-    
+
     // Tracking pobytu osób w pokojach
     // roomId -> czas do którego osoby zostaną w pokoju (null = brak osób)
     private val peopleStayUntil = mutableMapOf<String, LocalDateTime?>()
+
     // roomId -> aktualna liczba osób
     private val currentPeopleCount = mutableMapOf<String, Int>()
     
@@ -92,7 +95,7 @@ class EnvironmentSimulator(
     fun clearEvents() {
         events.clear()
     }
-    
+
     /**
      * Dodaje alert od agenta do systemu
      * Przechowuje maksymalnie 100 ostatnich alertów
@@ -103,19 +106,19 @@ class EnvironmentSimulator(
             alerts.removeAt(0)
         }
     }
-    
+
     /**
      * Zwraca listę wszystkich alertów od agentów
      */
     fun getAlerts(): List<Alert> = alerts.toList()
-    
+
     /**
      * Czyści listę alertów
      */
     fun clearAlerts() {
         alerts.clear()
     }
-    
+
     /**
      * Dodaje wiadomość NL od agenta
      * Przechowuje maksymalnie 200 ostatnich wiadomości
@@ -126,40 +129,42 @@ class EnvironmentSimulator(
             agentMessages.removeAt(0)
         }
     }
-    
+
     /**
      * Zwraca wszystkie wiadomości dla konkretnego agenta (gdzie to=agentId lub from=agentId)
      */
-    fun getMessagesForAgent(agentId: String): List<AgentMessage> {
-        return agentMessages.filter { 
+    fun getMessagesForAgent(agentId: String): List<AgentMessage> =
+        agentMessages.filter {
             it.to == agentId || it.from == agentId || it.to == "broadcast"
         }
-    }
-    
+
     /**
      * Zwraca wszystkie wiadomości
      */
     fun getAllMessages(): List<AgentMessage> = agentMessages.toList()
-    
+
     /**
      * Zwraca nowe wiadomości dla agenta (po określonym czasie)
      */
-    fun getNewMessagesForAgent(agentId: String, afterTimestamp: String?): List<AgentMessage> {
+    fun getNewMessagesForAgent(
+        agentId: String,
+        afterTimestamp: String?,
+    ): List<AgentMessage> {
         if (afterTimestamp == null) {
             return getMessagesForAgent(agentId)
         }
-        return agentMessages.filter { 
+        return agentMessages.filter {
             (it.to == agentId || it.to == "broadcast") && it.timestamp > afterTimestamp
         }
     }
-    
+
     /**
      * Czyści listę wiadomości
      */
     fun clearMessages() {
         agentMessages.clear()
     }
-    
+
     /**
      * Generuje unikalne ID dla wiadomości
      */
@@ -184,10 +189,17 @@ class EnvironmentSimulator(
                 timeSpeedMultiplier = timeSpeedMultiplier,
                 powerOutage = powerOutage,
                 daylightIntensity = daylightIntensity,
-                isHeating = heatingOn,
             )
 
         updatePeopleMovement(currentSimulationTime)
+        
+        // Automatycznie wyłącz wszystkie ogrzewania przy awarii zasilania
+        if (powerOutage) {
+            roomHeating.keys.forEach { roomId ->
+                roomHeating[roomId] = false
+            }
+        }
+        
         updateTemperatures()
         checkDeviceFailures(currentSimulationTime)
         generateRandomEvents(currentSimulationTime)
@@ -208,33 +220,44 @@ class EnvironmentSimulator(
         currentState.rooms.forEach { room ->
             val stayUntil = peopleStayUntil[room.id]
             val currentCount = currentPeopleCount[room.id] ?: 0
-            
+
             // Sprawdź czy osoby powinny opuścić pokój
             val shouldLeave = stayUntil != null && currentTime.isAfter(stayUntil)
-            
+
             // Prawdopodobieństwo że nowe osoby przyjdą (tylko jeśli pokój pusty lub losowo dojdą)
-            val arrivalProbability = if (isWorkingHours) {
-                when (hour) {
-                    in 8..9 -> 0.15    // Poranne przychodzenie
-                    in 9..12 -> 0.08   // Przedpołudnie - rzadziej
-                    in 12..13 -> 0.05  // Przerwa obiadowa
-                    in 13..16 -> 0.08  // Popołudnie
-                    in 16..17 -> 0.03  // Koniec pracy
-                    else -> 0.02
+            val arrivalProbability =
+                if (isWorkingHours) {
+                    when (hour) {
+                        in 8..9 -> 0.15
+
+                        // Poranne przychodzenie
+                        in 9..12 -> 0.08
+
+                        // Przedpołudnie - rzadziej
+                        in 12..13 -> 0.05
+
+                        // Przerwa obiadowa
+                        in 13..16 -> 0.08
+
+                        // Popołudnie
+                        in 16..17 -> 0.03
+
+                        // Koniec pracy
+                        else -> 0.02
+                    }
+                } else {
+                    0.01 // Poza godzinami pracy - bardzo rzadko
                 }
-            } else {
-                0.01 // Poza godzinami pracy - bardzo rzadko
-            }
-            
+
             var newPeopleCount = currentCount
             var motionDetected = currentCount > 0
-            
+
             if (shouldLeave) {
                 // Część osób wychodzi (losowo 50-100% osób)
                 val leavingRatio = 0.5 + random.nextDouble() * 0.5
                 val leaving = (currentCount * leavingRatio).toInt()
                 newPeopleCount = max(0, currentCount - max(1, leaving))
-                
+
                 if (newPeopleCount > 0) {
                     // Część osób zostaje - przedłuż czas pobytu o 5-15 minut
                     val extraStay = 5 + random.nextInt(11) // 5-15 minut
@@ -243,25 +266,25 @@ class EnvironmentSimulator(
                     peopleStayUntil[room.id] = null
                 }
             }
-            
+
             // Nowe osoby mogą przyjść
             if (random.nextDouble() < arrivalProbability) {
                 val newArrivals = 1 + random.nextInt(3) // 1-3 nowe osoby
                 newPeopleCount += newArrivals
                 newPeopleCount = min(8, newPeopleCount) // Max 8 osób w pokoju
-                
+
                 // Ustal czas pobytu: 10-45 minut symulacji
                 val stayDuration = 10 + random.nextInt(36) // 10-45 minut
                 val newStayUntil = currentTime.plusMinutes(stayDuration.toLong())
-                
+
                 // Weź późniejszy czas jeśli ktoś już był
                 val existingStay = peopleStayUntil[room.id]
                 if (existingStay == null || newStayUntil.isAfter(existingStay)) {
                     peopleStayUntil[room.id] = newStayUntil
                 }
-                
+
                 motionDetected = true
-                
+
                 events.add(
                     EnvironmentEvent(
                         type = "motion",
@@ -272,24 +295,26 @@ class EnvironmentSimulator(
                     ),
                 )
             }
-            
+
             // Zapisz aktualny stan
             currentPeopleCount[room.id] = newPeopleCount
-            
+
             // Generuj zdarzenia ruchu gdy są ludzie (symulacja czujnika)
             if (newPeopleCount > 0 && random.nextDouble() < 0.3) {
                 motionDetected = true
             }
 
-            val updatedSensor = room.motionSensor.copy(
-                motionDetected = motionDetected,
-                lastMotionTime = if (motionDetected) currentTime.format(formatter) else room.motionSensor.lastMotionTime,
-            )
+            val updatedSensor =
+                room.motionSensor.copy(
+                    motionDetected = motionDetected,
+                    lastMotionTime = if (motionDetected) currentTime.format(formatter) else room.motionSensor.lastMotionTime,
+                )
 
-            val updatedRoom = room.copy(
-                motionSensor = updatedSensor,
-                peopleCount = newPeopleCount,
-            )
+            val updatedRoom =
+                room.copy(
+                    motionSensor = updatedSensor,
+                    peopleCount = newPeopleCount,
+                )
 
             val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
             currentState = currentState.copy(rooms = updatedRooms)
@@ -305,24 +330,38 @@ class EnvironmentSimulator(
     private fun updateTemperatures() {
         currentState.rooms.forEach { room ->
             val currentTemp = room.temperatureSensor.temperature
-            val noise = random.nextDouble() * 1.0 - 0.5
             val newTemp: Double
 
-            if (heatingOn) {
-                // Ogrzewanie włączone: dąż do 22°C (może się ogrzewać lub chłodzić)
+            val isRoomHeatingOn = roomHeating[room.id] ?: false
+            if (isRoomHeatingOn) {
+                // Ogrzewanie włączone dla tego pokoju: dąż do 22°C (może się ogrzewać lub chłodzić)
                 val targetTemperature = 22.0
                 val tempDiff = targetTemperature - currentTemp
-                newTemp = currentTemp + tempDiff * 0.1 + noise
+                val change = tempDiff * 0.05 // Zmniejszone z 0.1 na 0.05 - wolniejsze ogrzewanie/chłodzenie
+                // Noise w tym samym kierunku co zmiana (dodatni gdy ogrzewanie, ujemny gdy chłodzenie)
+                val directionalNoise = if (change >= 0) {
+                    random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
+                } else {
+                    -random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
+                }
+                newTemp = currentTemp + change + directionalNoise
             } else {
                 // Ogrzewanie wyłączone: tylko chłodzenie w kierunku temperatury zewnętrznej
                 // Jeśli pokój jest cieplejszy niż zewnętrzna, chłodź się
-                // Jeśli pokój jest chłodniejszy niż zewnętrzna, nie ogrzewaj (tylko szum)
+                // Jeśli pokój jest chłodniejszy niż zewnętrzna, temperatura zbliża się do zewnętrznej (ale wolniej)
                 if (currentTemp > externalTemperature) {
                     val tempDiff = externalTemperature - currentTemp
-                    newTemp = currentTemp + tempDiff * 0.1 + noise
+                    val change = tempDiff * 0.05 // Zmniejszone z 0.1 na 0.05 - wolniejsze chłodzenie
+                    // Noise ujemny (chłodzenie)
+                    val directionalNoise = -random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
+                    newTemp = currentTemp + change + directionalNoise
                 } else {
-                    // Pokój jest chłodniejszy niż zewnętrzna - nie ogrzewaj, tylko dodaj szum
-                    newTemp = currentTemp + noise
+                    // Pokój jest chłodniejszy niż zewnętrzna - temperatura wolno zbliża się do zewnętrznej
+                    val tempDiff = externalTemperature - currentTemp
+                    val change = tempDiff * 0.025 // Zmniejszone z 0.05 na 0.025 - wolniejsze zbliżanie się
+                    // Mały noise w kierunku wzrostu (ale bardzo mały, bo ogrzewanie wyłączone)
+                    val directionalNoise = random.nextDouble() * 0.05 // Zmniejszone z 0.1 na 0.05
+                    newTemp = currentTemp + change + directionalNoise
                 }
             }
 
@@ -487,30 +526,32 @@ class EnvironmentSimulator(
                 }
 
             // Printers are controlled by agents - simulator only turns off on failures
-            val updatedPrinter = room.printer?.let { printer ->
-                if (printer.state == DeviceState.BROKEN || powerOutage) {
-                    printer.copy(state = DeviceState.OFF)
-                } else if (printer.state == DeviceState.ON && (printer.tonerLevel == 0 || printer.paperLevel == 0)) {
-                    // Automatically turn off if no resources (agent cannot turn on without resources)
-                    printer.copy(state = DeviceState.OFF)
-                } else {
-                    // Leave printer state unchanged - controlled by agent via API
-                    printer
+            val updatedPrinter =
+                room.printer?.let { printer ->
+                    if (printer.state == DeviceState.BROKEN || powerOutage) {
+                        printer.copy(state = DeviceState.OFF)
+                    } else if (printer.state == DeviceState.ON && (printer.tonerLevel == 0 || printer.paperLevel == 0)) {
+                        // Automatically turn off if no resources (agent cannot turn on without resources)
+                        printer.copy(state = DeviceState.OFF)
+                    } else {
+                        // Leave printer state unchanged - controlled by agent via API
+                        printer
+                    }
                 }
-            }
 
             // Resource consumption is controlled by agent - simulator does not consume automatically
             val finalPrinter = updatedPrinter
-            
-            val updatedRoom = room.copy(
-                lights = updatedLights,
-                printer = finalPrinter
-            )
+
+            val updatedRoom =
+                room.copy(
+                    lights = updatedLights,
+                    printer = finalPrinter,
+                )
             val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
             currentState = currentState.copy(rooms = updatedRooms)
         }
     }
-    
+
     /**
      * Automatyczne uzupełnianie zasobów drukarki:
      * Oba warunki muszą być spełnione jednocześnie:
@@ -524,33 +565,33 @@ class EnvironmentSimulator(
             room.printer?.let { printer ->
                 var updatedPrinter = printer
                 var needsUpdate = false
-                
+
                 // Sprawdź toner - uzupełnij tylko jeśli minęła godzina I ktoś jest w pokoju
                 tonerDepletedAt[printer.id]?.let { depletedTime ->
                     val duration = java.time.Duration.between(depletedTime, currentSimulationTime)
                     val hoursSinceDepletion = duration.toHours()
                     val shouldReplenish = (hoursSinceDepletion >= 1L && room.peopleCount > 0)
-                    
+
                     if (shouldReplenish && printer.tonerLevel == 0) {
                         updatedPrinter = updatedPrinter.copy(tonerLevel = 100)
                         tonerDepletedAt.remove(printer.id)
                         needsUpdate = true
                     }
                 }
-                
+
                 // Sprawdź papier - uzupełnij tylko jeśli minęła godzina I ktoś jest w pokoju
                 paperDepletedAt[printer.id]?.let { depletedTime ->
                     val duration = java.time.Duration.between(depletedTime, currentSimulationTime)
                     val hoursSinceDepletion = duration.toHours()
                     val shouldReplenish = (hoursSinceDepletion >= 1L && room.peopleCount > 0)
-                    
+
                     if (shouldReplenish && updatedPrinter.paperLevel == 0) {
                         updatedPrinter = updatedPrinter.copy(paperLevel = 100)
                         paperDepletedAt.remove(printer.id)
                         needsUpdate = true
                     }
                 }
-                
+
                 // Zaktualizuj stan tylko jeśli coś się zmieniło
                 if (needsUpdate) {
                     val updatedRoom = room.copy(printer = updatedPrinter)
@@ -568,108 +609,119 @@ class EnvironmentSimulator(
      * Każdy przedział czasowy (30 minut) jest sprawdzany tylko raz
      */
     private fun updateScheduledMeetings(currentTime: LocalDateTime) {
-        val updatedRooms = currentState.rooms.map { room ->
-            val roomCheckedSlots = checkedTimeSlots.getOrPut(room.id) { mutableSetOf() }
-            val allMeetings = mutableListOf<Meeting>()
-            
-            // Pobierz istniejące spotkania które jeszcze nie minęły i są w zakresie 1 dnia roboczego
-            val existingMeetings = room.scheduledMeetings.filter { meeting ->
-                val endTime = LocalDateTime.parse(meeting.endTime, formatter)
-                val isInFuture = endTime.isAfter(currentTime)
-                val isWithinWorkingDay = isWithinOneWorkingDay(currentTime, endTime)
-                isInFuture && isWithinWorkingDay
-            }
-            allMeetings.addAll(existingMeetings)
-            
-            // Oblicz zakres czasowy do sprawdzenia (od teraz do 1 dnia roboczego do przodu)
-            val endCheckTime = getOneWorkingDayForward(currentTime)
-            
-            // Sprawdź każdy przedział 30-minutowy w zakresie
-            var checkTime = currentTime
-            // Zaokrąglij do najbliższego 30-minutowego przedziału
-            val currentMinute = checkTime.minute
-            val roundedMinute = (currentMinute / 30) * 30
-            checkTime = checkTime.withMinute(roundedMinute).withSecond(0).withNano(0)
-            
-            while (checkTime.isBefore(endCheckTime) || checkTime.isEqual(endCheckTime)) {
-                val timeSlotKey = checkTime.format(formatter)
-                
-                // Sprawdź tylko jeśli ten przedział nie był jeszcze sprawdzony
-                if (!roomCheckedSlots.contains(timeSlotKey)) {
-                    val hour = checkTime.hour
-                    val probability = when {
-                        hour in 8..15 -> 0.5  // Godziny robocze: 8-16 (8:00-15:59)
-                        hour in 16..21 -> 0.2 // Godziny wieczorne: 16-22 (16:00-21:59)
-                        else -> 0.0           // Noc: 22-7 (22:00-7:59)
+        val updatedRooms =
+            currentState.rooms.map { room ->
+                val roomCheckedSlots = checkedTimeSlots.getOrPut(room.id) { mutableSetOf() }
+                val allMeetings = mutableListOf<Meeting>()
+
+                // Pobierz istniejące spotkania które jeszcze nie minęły i są w zakresie 1 dnia roboczego
+                val existingMeetings =
+                    room.scheduledMeetings.filter { meeting ->
+                        val endTime = LocalDateTime.parse(meeting.endTime, formatter)
+                        val isInFuture = endTime.isAfter(currentTime)
+                        val isWithinWorkingDay = isWithinOneWorkingDay(currentTime, endTime)
+                        isInFuture && isWithinWorkingDay
                     }
-                    
-                    // Sprawdź czy nie ma już spotkania w tym przedziale
-                    val hasOverlap = allMeetings.any { meeting ->
-                        val meetingStart = LocalDateTime.parse(meeting.startTime, formatter)
-                        val meetingEnd = LocalDateTime.parse(meeting.endTime, formatter)
-                        checkTime.isBefore(meetingEnd) && checkTime.plusMinutes(30).isAfter(meetingStart)
-                    }
-                    
-                    if (!hasOverlap && random.nextDouble() < probability) {
-                        val meetingStart = checkTime
-                        val meetingEnd = checkTime.plusMinutes(30)
-                        allMeetings.add(
-                            Meeting(
-                                startTime = meetingStart.format(formatter),
-                                endTime = meetingEnd.format(formatter),
-                                title = "Spotkanie"
+                allMeetings.addAll(existingMeetings)
+
+                // Oblicz zakres czasowy do sprawdzenia (od teraz do 1 dnia roboczego do przodu)
+                val endCheckTime = getOneWorkingDayForward(currentTime)
+
+                // Sprawdź każdy przedział 30-minutowy w zakresie
+                var checkTime = currentTime
+                // Zaokrąglij do najbliższego 30-minutowego przedziału
+                val currentMinute = checkTime.minute
+                val roundedMinute = (currentMinute / 30) * 30
+                checkTime = checkTime.withMinute(roundedMinute).withSecond(0).withNano(0)
+
+                while (checkTime.isBefore(endCheckTime) || checkTime.isEqual(endCheckTime)) {
+                    val timeSlotKey = checkTime.format(formatter)
+
+                    // Sprawdź tylko jeśli ten przedział nie był jeszcze sprawdzony
+                    if (!roomCheckedSlots.contains(timeSlotKey)) {
+                        val hour = checkTime.hour
+                        val probability =
+                            when {
+                                hour in 8..15 -> 0.5
+
+                                // Godziny robocze: 8-16 (8:00-15:59)
+                                hour in 16..21 -> 0.2
+
+                                // Godziny wieczorne: 16-22 (16:00-21:59)
+                                else -> 0.0 // Noc: 22-7 (22:00-7:59)
+                            }
+
+                        // Sprawdź czy nie ma już spotkania w tym przedziale
+                        val hasOverlap =
+                            allMeetings.any { meeting ->
+                                val meetingStart = LocalDateTime.parse(meeting.startTime, formatter)
+                                val meetingEnd = LocalDateTime.parse(meeting.endTime, formatter)
+                                checkTime.isBefore(meetingEnd) && checkTime.plusMinutes(30).isAfter(meetingStart)
+                            }
+
+                        if (!hasOverlap && random.nextDouble() < probability) {
+                            val meetingStart = checkTime
+                            val meetingEnd = checkTime.plusMinutes(30)
+                            allMeetings.add(
+                                Meeting(
+                                    startTime = meetingStart.format(formatter),
+                                    endTime = meetingEnd.format(formatter),
+                                    title = "Spotkanie",
+                                ),
                             )
-                        )
+                        }
+
+                        // Oznacz przedział jako sprawdzony
+                        roomCheckedSlots.add(timeSlotKey)
                     }
-                    
-                    // Oznacz przedział jako sprawdzony
-                    roomCheckedSlots.add(timeSlotKey)
+
+                    // Przejdź do następnego przedziału 30-minutowego
+                    checkTime = checkTime.plusMinutes(30)
                 }
-                
-                // Przejdź do następnego przedziału 30-minutowego
-                checkTime = checkTime.plusMinutes(30)
-            }
-            
-            // Usuń stare wpisy z checkedTimeSlots (starsze niż 2 dni)
-            val twoDaysAgo = currentTime.minusDays(2)
-            roomCheckedSlots.removeIf { slotTime ->
-                try {
-                    val slot = LocalDateTime.parse(slotTime, formatter)
-                    slot.isBefore(twoDaysAgo)
-                } catch (e: Exception) {
-                    true // Usuń nieprawidłowe wpisy
+
+                // Usuń stare wpisy z checkedTimeSlots (starsze niż 2 dni)
+                val twoDaysAgo = currentTime.minusDays(2)
+                roomCheckedSlots.removeIf { slotTime ->
+                    try {
+                        val slot = LocalDateTime.parse(slotTime, formatter)
+                        slot.isBefore(twoDaysAgo)
+                    } catch (e: Exception) {
+                        true // Usuń nieprawidłowe wpisy
+                    }
                 }
+
+                // Sortuj spotkania według czasu rozpoczęcia
+                val sortedMeetings = allMeetings.sortedBy { LocalDateTime.parse(it.startTime, formatter) }
+
+                room.copy(scheduledMeetings = sortedMeetings)
             }
-            
-            // Sortuj spotkania według czasu rozpoczęcia
-            val sortedMeetings = allMeetings.sortedBy { LocalDateTime.parse(it.startTime, formatter) }
-            
-            room.copy(scheduledMeetings = sortedMeetings)
-        }
-        
+
         currentState = currentState.copy(rooms = updatedRooms)
     }
-    
+
     /**
      * Sprawdza czy podany czas jest w zakresie 1 dnia roboczego do przodu od czasu bazowego
      * Dzień roboczy: poniedziałek-piątek
      */
-    private fun isWithinOneWorkingDay(baseTime: LocalDateTime, checkTime: LocalDateTime): Boolean {
+    private fun isWithinOneWorkingDay(
+        baseTime: LocalDateTime,
+        checkTime: LocalDateTime,
+    ): Boolean {
         if (checkTime.isBefore(baseTime) || checkTime.isEqual(baseTime)) {
             return false
         }
-        
+
         // Znajdź następny dzień roboczy od baseTime
         var nextWorkingDay = baseTime
         var workingDaysAdded = 0
-        
+
         // Jeśli jesteśmy w trakcie dnia roboczego (pon-pt), dodaj 1 dzień roboczy
         if (nextWorkingDay.dayOfWeek.value in 1..5) {
             workingDaysAdded = 1
             // Przejdź do końca tego dnia
             nextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
         }
-        
+
         // Przejdź do następnego dnia roboczego
         while (workingDaysAdded < 1) {
             nextWorkingDay = nextWorkingDay.plusDays(1)
@@ -677,12 +729,12 @@ class EnvironmentSimulator(
                 workingDaysAdded++
             }
         }
-        
+
         // Sprawdź czy checkTime jest przed końcem następnego dnia roboczego
         val endOfNextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
         return checkTime.isBefore(endOfNextWorkingDay) || checkTime.isEqual(endOfNextWorkingDay)
     }
-    
+
     /**
      * Zwraca czas końca 1 dnia roboczego do przodu od podanego czasu
      * Dzień roboczy: poniedziałek-piątek
@@ -690,14 +742,14 @@ class EnvironmentSimulator(
     private fun getOneWorkingDayForward(baseTime: LocalDateTime): LocalDateTime {
         var nextWorkingDay = baseTime
         var workingDaysAdded = 0
-        
+
         // Jeśli jesteśmy w trakcie dnia roboczego (pon-pt), dodaj 1 dzień roboczy
         if (nextWorkingDay.dayOfWeek.value in 1..5) {
             workingDaysAdded = 1
             // Przejdź do końca tego dnia
             nextWorkingDay = nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
         }
-        
+
         // Przejdź do końca następnego dnia roboczego
         while (workingDaysAdded < 1) {
             nextWorkingDay = nextWorkingDay.plusDays(1)
@@ -705,7 +757,7 @@ class EnvironmentSimulator(
                 workingDaysAdded++
             }
         }
-        
+
         // Zwróć koniec dnia (23:59:59)
         return nextWorkingDay.withHour(23).withMinute(59).withSecond(59)
     }
@@ -769,7 +821,6 @@ class EnvironmentSimulator(
             timeSpeedMultiplier = timeSpeedMultiplier,
             powerOutage = false,
             daylightIntensity = 1.0,
-            isHeating = heatingOn,
         )
     }
 
@@ -787,18 +838,42 @@ class EnvironmentSimulator(
     }
 
     /**
-     * Włącza/wyłącza ogrzewanie
+     * Włącza/wyłącza ogrzewanie dla konkretnego pokoju
+     * Nie pozwala włączyć ogrzewania podczas awarii zasilania
+     * @return true jeśli operacja się powiodła, false jeśli pokój nie został znaleziony lub awaria zasilania
      */
-    fun setHeating(on: Boolean) {
-        heatingOn = on
+    fun setRoomHeating(
+        roomId: String,
+        on: Boolean,
+    ): Boolean {
+        val roomExists = currentState.rooms.any { it.id == roomId }
+        if (!roomExists) {
+            return false
+        }
+        
+        // Nie można włączyć ogrzewania podczas awarii zasilania
+        if (on && powerOutage) {
+            return false
+        }
+        
+        roomHeating[roomId] = on
+        return true
     }
+
+    /**
+     * Zwraca stan ogrzewania dla konkretnego pokoju
+     */
+    fun getRoomHeating(roomId: String): Boolean = roomHeating[roomId] ?: false
 
     /**
      * Ustawia stan drukarki (ON/OFF/BROKEN)
      * Nie pozwala włączyć drukarki jeśli toner lub papier = 0%
      * @return true jeśli operacja się powiodła, false jeśli drukarka nie została znaleziona lub brak zasobów
      */
-    fun setPrinterState(printerId: String, state: DeviceState): Boolean {
+    fun setPrinterState(
+        printerId: String,
+        state: DeviceState,
+    ): Boolean {
         val room = currentState.rooms.find { it.printer?.id == printerId }
         val printer = room?.printer ?: return false
 
@@ -829,19 +904,22 @@ class EnvironmentSimulator(
      * Automatycznie zapisuje czas wyczerpania jeśli poziom spadł do 0%
      * @return true jeśli operacja się powiodła, false jeśli drukarka nie została znaleziona
      */
-    fun setPrinterTonerLevel(printerId: String, level: Int): Boolean {
+    fun setPrinterTonerLevel(
+        printerId: String,
+        level: Int,
+    ): Boolean {
         val room = currentState.rooms.find { it.printer?.id == printerId }
         val printer = room?.printer ?: return false
 
         val clampedLevel = max(0, min(100, level))
         val updatedPrinter = printer.copy(tonerLevel = clampedLevel)
-        
+
         if (clampedLevel == 0 && printer.tonerLevel > 0) {
             tonerDepletedAt[printerId] = currentSimulationTime
         } else if (clampedLevel > 0) {
             tonerDepletedAt.remove(printerId)
         }
-        
+
         val updatedRoom = room.copy(printer = updatedPrinter)
         val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
         currentState = currentState.copy(rooms = updatedRooms)
@@ -853,19 +931,22 @@ class EnvironmentSimulator(
      * Automatycznie zapisuje czas wyczerpania jeśli poziom spadł do 0%
      * @return true jeśli operacja się powiodła, false jeśli drukarka nie została znaleziona
      */
-    fun setPrinterPaperLevel(printerId: String, level: Int): Boolean {
+    fun setPrinterPaperLevel(
+        printerId: String,
+        level: Int,
+    ): Boolean {
         val room = currentState.rooms.find { it.printer?.id == printerId }
         val printer = room?.printer ?: return false
 
         val clampedLevel = max(0, min(100, level))
         val updatedPrinter = printer.copy(paperLevel = clampedLevel)
-        
+
         if (clampedLevel == 0 && printer.paperLevel > 0) {
             paperDepletedAt[printerId] = currentSimulationTime
         } else if (clampedLevel > 0) {
             paperDepletedAt.remove(printerId)
         }
-        
+
         val updatedRoom = room.copy(printer = updatedPrinter)
         val updatedRooms = currentState.rooms.map { if (it.id == room.id) updatedRoom else it }
         currentState = currentState.copy(rooms = updatedRooms)
@@ -876,10 +957,8 @@ class EnvironmentSimulator(
      * Zwraca stan drukarki o podanym ID
      * @return PrinterDevice jeśli znaleziono, null w przeciwnym razie
      */
-    fun getPrinter(printerId: String): PrinterDevice? {
-        return currentState.rooms.find { it.printer?.id == printerId }?.printer
-    }
-    
+    fun getPrinter(printerId: String): PrinterDevice? = currentState.rooms.find { it.printer?.id == printerId }?.printer
+
     /**
      * Zwraca światło o podanym ID
      * @return LightDevice jeśli znaleziono, null w przeciwnym razie
@@ -890,34 +969,39 @@ class EnvironmentSimulator(
         }
         return null
     }
-    
+
     /**
      * Ustawia stan światła (ON/OFF)
      * @return true jeśli operacja się powiodła, false jeśli światło nie zostało znalezione lub jest zepsute
      */
-    fun setLightState(lightId: String, state: DeviceState, brightness: Int? = null): Boolean {
+    fun setLightState(
+        lightId: String,
+        state: DeviceState,
+        brightness: Int? = null,
+    ): Boolean {
         currentState.rooms.forEach { room ->
             val lightIndex = room.lights.indexOfFirst { it.id == lightId }
             if (lightIndex >= 0) {
                 val light = room.lights[lightIndex]
-                
+
                 // Nie można włączyć zepsutego światła
                 if (light.state == DeviceState.BROKEN && state == DeviceState.ON) {
                     return false
                 }
-                
+
                 // Nie można włączyć gdy awaria zasilania
                 if (powerOutage && state == DeviceState.ON) {
                     return false
                 }
-                
+
                 val newBrightness = brightness ?: light.brightness
                 val clampedBrightness = max(0, min(100, newBrightness))
-                
-                val updatedLight = light.copy(
-                    state = state,
-                    brightness = clampedBrightness
-                )
+
+                val updatedLight =
+                    light.copy(
+                        state = state,
+                        brightness = clampedBrightness,
+                    )
                 val updatedLights = room.lights.toMutableList()
                 updatedLights[lightIndex] = updatedLight
                 val updatedRoom = room.copy(lights = updatedLights)
@@ -928,18 +1012,21 @@ class EnvironmentSimulator(
         }
         return false
     }
-    
+
     /**
      * Ustawia jasność światła (0-100)
      * @return true jeśli operacja się powiodła, false jeśli światło nie zostało znalezione
      */
-    fun setLightBrightness(lightId: String, brightness: Int): Boolean {
+    fun setLightBrightness(
+        lightId: String,
+        brightness: Int,
+    ): Boolean {
         currentState.rooms.forEach { room ->
             val lightIndex = room.lights.indexOfFirst { it.id == lightId }
             if (lightIndex >= 0) {
                 val light = room.lights[lightIndex]
                 val clampedBrightness = max(0, min(100, brightness))
-                
+
                 val updatedLight = light.copy(brightness = clampedBrightness)
                 val updatedLights = room.lights.toMutableList()
                 updatedLights[lightIndex] = updatedLight
@@ -951,12 +1038,15 @@ class EnvironmentSimulator(
         }
         return false
     }
-    
+
     /**
      * Ustawia stan rolet (OPEN/CLOSED)
      * @return true jeśli operacja się powiodła, false jeśli rolety nie zostały znalezione
      */
-    fun setBlindsState(blindsId: String, state: BlindState): Boolean {
+    fun setBlindsState(
+        blindsId: String,
+        state: BlindState,
+    ): Boolean {
         currentState.rooms.forEach { room ->
             val blinds = room.blinds
             if (blinds?.id == blindsId) {
@@ -969,14 +1059,12 @@ class EnvironmentSimulator(
         }
         return false
     }
-    
+
     /**
      * Zwraca rolety o podanym ID
      * @return BlindsDevice jeśli znaleziono, null w przeciwnym razie
      */
-    fun getBlinds(blindsId: String): BlindsDevice? {
-        return currentState.rooms.find { it.blinds?.id == blindsId }?.blinds
-    }
+    fun getBlinds(blindsId: String): BlindsDevice? = currentState.rooms.find { it.blinds?.id == blindsId }?.blinds
 }
 
 data class RoomConfig(
@@ -1017,4 +1105,3 @@ fun defaultRooms(): List<RoomConfig> =
             hasBlinds = true,
         ),
     )
-
