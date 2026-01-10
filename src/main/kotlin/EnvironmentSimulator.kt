@@ -50,6 +50,36 @@ class EnvironmentSimulator(
 
     // roomId -> aktualna liczba osób
     private val currentPeopleCount = mutableMapOf<String, Int>()
+    
+  //  init {
+        // Dodaj przykładowe wiadomości do demonstracji
+    //    addMockMessages()
+   // }
+    
+    private fun addMockMessages() {
+        val now = LocalDateTime.now().format(formatter)
+        val earlier = LocalDateTime.now().minusMinutes(5).format(formatter)
+        
+        agentMessages.add(AgentMessage(
+            id = "msg_mock_1",
+            from = "light_agent",
+            to = "broadcast",
+            type = MessageType.INFORM,
+            content = "Włączyłem światła w sali 208 - wykryto ruch, 3 osoby w pomieszczeniu",
+            timestamp = earlier,
+            context = mapOf("room" to "208", "peopleCount" to "3", "brightness" to "70%")
+        ))
+        
+        agentMessages.add(AgentMessage(
+            id = "msg_mock_2",
+            from = "printer_agent",
+            to = "broadcast",
+            type = MessageType.INFORM,
+            content = "Niski poziom tonera w drukarce printer_208 - pozostało 15%",
+            timestamp = now,
+            context = mapOf("room" to "208", "tonerLevel" to "15%")
+        ))
+    }
 
     /**
      * Zwraca aktualny stan środowiska (wszystkie pokoje, urządzenia, parametry)
