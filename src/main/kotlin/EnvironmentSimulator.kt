@@ -24,7 +24,8 @@ class EnvironmentSimulator(
     // Ogrzewanie per pokój: roomId -> czy ogrzewanie włączone
     private val roomHeating = mutableMapOf<String, Boolean>()
     private var powerOutage: Boolean = false
-    private var daylightIntensity: Double = 1.0
+    private var externalLightLux: Double = 0.0 // Światło zewnętrzne w lux (0-10000) - aktualna wartość
+    private var targetExternalLightLux: Double = 0.0 // Docelowa wartość światła (zmieniana losowo)
 
     // Generator zdarzeń
     private val events = mutableListOf<EnvironmentEvent>()
@@ -50,35 +51,39 @@ class EnvironmentSimulator(
 
     // roomId -> aktualna liczba osób
     private val currentPeopleCount = mutableMapOf<String, Int>()
-    
-  //  init {
-        // Dodaj przykładowe wiadomości do demonstracji
+
+    //  init {
+    // Dodaj przykładowe wiadomości do demonstracji
     //    addMockMessages()
-   // }
-    
+    // }
+
     private fun addMockMessages() {
         val now = LocalDateTime.now().format(formatter)
         val earlier = LocalDateTime.now().minusMinutes(5).format(formatter)
-        
-        agentMessages.add(AgentMessage(
-            id = "msg_mock_1",
-            from = "light_agent",
-            to = "broadcast",
-            type = MessageType.INFORM,
-            content = "Włączyłem światła w sali 208 - wykryto ruch, 3 osoby w pomieszczeniu",
-            timestamp = earlier,
-            context = mapOf("room" to "208", "peopleCount" to "3", "brightness" to "70%")
-        ))
-        
-        agentMessages.add(AgentMessage(
-            id = "msg_mock_2",
-            from = "printer_agent",
-            to = "broadcast",
-            type = MessageType.INFORM,
-            content = "Niski poziom tonera w drukarce printer_208 - pozostało 15%",
-            timestamp = now,
-            context = mapOf("room" to "208", "tonerLevel" to "15%")
-        ))
+
+        agentMessages.add(
+            AgentMessage(
+                id = "msg_mock_1",
+                from = "light_agent",
+                to = "broadcast",
+                type = MessageType.INFORM,
+                content = "Włączyłem światła w sali 208 - wykryto ruch, 3 osoby w pomieszczeniu",
+                timestamp = earlier,
+                context = mapOf("room" to "208", "peopleCount" to "3", "brightness" to "70%"),
+            ),
+        )
+
+        agentMessages.add(
+            AgentMessage(
+                id = "msg_mock_2",
+                from = "printer_agent",
+                to = "broadcast",
+                type = MessageType.INFORM,
+                content = "Niski poziom tonera w drukarce printer_208 - pozostało 15%",
+                timestamp = now,
+                context = mapOf("room" to "208", "tonerLevel" to "15%"),
+            ),
+        )
     }
 
     /**
@@ -184,28 +189,32 @@ class EnvironmentSimulator(
         val actualDelta = deltaMinutes * timeSpeedMultiplier
         currentSimulationTime = currentSimulationTime.plusMinutes(actualDelta.toLong())
 
+        // Aktualizuj światło zewnętrzne na podstawie godziny dnia
+        updateExternalLight(currentSimulationTime)
+
         currentState =
             currentState.copy(
                 simulationTime = currentSimulationTime.format(formatter),
                 externalTemperature = externalTemperature,
                 timeSpeedMultiplier = timeSpeedMultiplier,
                 powerOutage = powerOutage,
-                daylightIntensity = daylightIntensity,
+                externalLightLux = externalLightLux,
             )
 
         updatePeopleMovement(currentSimulationTime)
-        
+
         // Automatycznie wyłącz wszystkie ogrzewania przy awarii zasilania
         if (powerOutage) {
             roomHeating.keys.forEach { roomId ->
                 roomHeating[roomId] = false
             }
         }
-        
+
         updateTemperatures()
         checkDeviceFailures(currentSimulationTime)
         generateRandomEvents(currentSimulationTime)
         updateDeviceStates(currentSimulationTime)
+        updateRoomIllumination()
         replenishPrinterResources()
         updateScheduledMeetings(currentSimulationTime)
     }
@@ -341,11 +350,12 @@ class EnvironmentSimulator(
                 val tempDiff = targetTemperature - currentTemp
                 val change = tempDiff * 0.05 // Zmniejszone z 0.1 na 0.05 - wolniejsze ogrzewanie/chłodzenie
                 // Noise w tym samym kierunku co zmiana (dodatni gdy ogrzewanie, ujemny gdy chłodzenie)
-                val directionalNoise = if (change >= 0) {
-                    random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
-                } else {
-                    -random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
-                }
+                val directionalNoise =
+                    if (change >= 0) {
+                        random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
+                    } else {
+                        -random.nextDouble() * 0.1 // Zmniejszone z 0.2 na 0.1
+                    }
                 newTemp = currentTemp + change + directionalNoise
             } else {
                 // Ogrzewanie wyłączone: tylko chłodzenie w kierunku temperatury zewnętrznej
@@ -443,9 +453,156 @@ class EnvironmentSimulator(
     }
 
     /**
+     * Określa porę roku na podstawie miesiąca
+     */
+    private fun getSeason(month: Int): String =
+        when (month) {
+            12, 1, 2 -> "winter"
+
+            // Zima: grudzień, styczeń, luty
+            3, 4, 5 -> "spring"
+
+            // Wiosna: marzec, kwiecień, maj
+            6, 7, 8 -> "summer"
+
+            // Lato: czerwiec, lipiec, sierpień
+            9, 10, 11 -> "autumn"
+
+            // Jesień: wrzesień, październik, listopad
+            else -> "spring"
+        }
+
+    /**
+     * Określa godziny wschodu i zachodu słońca na podstawie pory roku
+     * Zwraca Pair(sunriseHour, sunsetHour)
+     */
+    private fun getSunriseSunset(season: String): Pair<Int, Int> =
+        when (season) {
+            "summer" -> Pair(5, 21)
+
+            // Lato: wschód 5:00, zachód 21:00
+            "spring", "autumn" -> Pair(6, 19)
+
+            // Wiosna/Jesień: wschód 6:00, zachód 19:00
+            "winter" -> Pair(7, 17)
+
+            // Zima: wschód 7:00, zachód 17:00
+            else -> Pair(6, 19)
+        }
+
+    /**
+     * Aktualizuje światło zewnętrzne na podstawie godziny dnia i pory roku
+     * Używa płynnych zmian - bazowa wartość jest obliczana na podstawie pory dnia/sezonu,
+     * potem losowo modyfikowana, a aktualna wartość płynnie dąży do docelowej
+     */
+    private fun updateExternalLight(currentTime: LocalDateTime) {
+        val month = currentTime.monthValue
+        val season = getSeason(month)
+        val (sunriseHour, sunsetHour) = getSunriseSunset(season)
+
+        val hour = currentTime.hour
+        val minute = currentTime.minute
+        val totalMinutes = hour * 60 + minute
+
+        // Oblicz bazową wartość światła na podstawie pory dnia i sezonu (bez losowości)
+        val baseLux =
+            when {
+                hour >= sunsetHour || hour < sunriseHour -> {
+                    // Noc: 50 lux (światło księżyca, latarnie)
+                    50.0
+                }
+
+                hour < sunriseHour + 2 -> {
+                    // Wschód słońca (2 godziny)
+                    val progress = (totalMinutes - sunriseHour * 60) / (2.0 * 60.0)
+                    val from = 50.0
+                    val to = 9000.0
+                    from + (to - from) * progress.coerceIn(0.0, 1.0)
+                }
+
+                hour >= sunsetHour - 2 && hour < sunsetHour -> {
+                    // Zachód słońca (2 godziny przed zachodem)
+                    val progress = (totalMinutes - (sunsetHour - 2) * 60) / (2.0 * 60.0)
+                    val from = 9000.0
+                    val to = 50.0
+                    from - (from - to) * progress.coerceIn(0.0, 1.0)
+                }
+
+                else -> {
+                    // Dzień: 8500-9000 lux (słoneczny dzień)
+                    8750.0
+                }
+            }
+
+        // Losowo zmieniaj docelową wartość tylko czasami (nie za każdym update'em)
+        // Zmień docelową wartość z prawdopodobieństwem 3% na update (co minutę symulacji)
+        // Docelowa wartość = bazowa + losowa zmiana (±500 lux w dzień, ±25 lux w nocy)
+        if (random.nextDouble() < 0.03) {
+            val randomVariation =
+                if (baseLux > 1000.0) {
+                    // Dzień: większa zmiana
+                    (random.nextDouble() - 0.5) * 1000.0 // -500 do +500 lux
+                } else {
+                    // Noc: mniejsza zmiana
+                    (random.nextDouble() - 0.5) * 50.0 // -25 do +25 lux
+                }
+            targetExternalLightLux = (baseLux + randomVariation).coerceIn(0.0, 10000.0)
+        }
+
+        // Płynnie interpoluj aktualną wartość w kierunku docelowej
+        // Interpolacja z szybkością 15% różnicy na update (co minutę symulacji)
+        val difference = targetExternalLightLux - externalLightLux
+        externalLightLux += difference * 0.15
+        externalLightLux = externalLightLux.coerceIn(0.0, 10000.0)
+
+        // Ustaw początkową docelową wartość jeśli jeszcze nie jest ustawiona
+        if (targetExternalLightLux == 0.0 && externalLightLux == 0.0) {
+            val initialVariation =
+                if (baseLux > 1000.0) {
+                    (random.nextDouble() - 0.5) * 1000.0
+                } else {
+                    (random.nextDouble() - 0.5) * 50.0
+                }
+            targetExternalLightLux = (baseLux + initialVariation).coerceIn(0.0, 10000.0)
+            externalLightLux = targetExternalLightLux
+        }
+    }
+
+    /**
+     * Oblicza naświetlenie (illumination) dla każdego pokoju
+     * Naświetlenie = światło zewnętrzne (z uwzględnieniem rolet) + światło z włączonych świateł
+     * Każde światło włączone daje: brightness% * 500 lux (max 500 lux na światło)
+     */
+    private fun updateRoomIllumination() {
+        val updatedRooms =
+            currentState.rooms.map { room ->
+                // Oblicz światło zewnętrzne (uwzględniając rolety)
+                val externalLight =
+                    if (room.blinds?.state == BlindState.CLOSED) {
+                        externalLightLux * 0.1 // Rolety zamknięte - 10% światła zewnętrznego
+                    } else {
+                        externalLightLux
+                    }
+
+                // Oblicz światło z włączonych świateł
+                val lightsLight =
+                    room.lights
+                        .filter { it.state == DeviceState.ON }
+                        .sumOf { light ->
+                            // brightness 0-100 -> 0-500 lux
+                            (light.brightness / 100.0) * 500.0
+                        }
+
+                val totalIllumination = externalLight + lightsLight
+
+                room.copy(illumination = totalIllumination)
+            }
+        currentState = currentState.copy(rooms = updatedRooms)
+    }
+
+    /**
      * Generuje losowe zdarzenia środowiskowe:
      * - Nagłe zmiany temperatury zewnętrznej
-     * - Zmiany natężenia światła dziennego (zachmurzenie)
      * - Tymczasowa utrata zasilania i jego przywrócenie
      */
     private fun generateRandomEvents(currentTime: LocalDateTime) {
@@ -460,20 +617,6 @@ class EnvironmentSimulator(
                     deviceId = null,
                     timestamp = currentTime.format(formatter),
                     description = "Nagła zmiana temperatury zewnętrznej do ${String.format("%.1f", externalTemperature)}°C",
-                ),
-            )
-        }
-
-        if (random.nextDouble() < 0.02) {
-            daylightIntensity = random.nextDouble() * 0.7 + 0.3 // 0.3 do 1.0
-
-            events.add(
-                EnvironmentEvent(
-                    type = "daylight_change",
-                    roomId = null,
-                    deviceId = null,
-                    timestamp = currentTime.format(formatter),
-                    description = "Zmiana natężenia światła dziennego do ${String.format("%.1f", daylightIntensity * 100)}%",
                 ),
             )
         }
@@ -813,8 +956,12 @@ class EnvironmentSimulator(
                         ),
                     peopleCount = 0,
                     scheduledMeetings = emptyList(),
+                    illumination = 0.0,
                 )
             }
+
+        // Oblicz początkową wartość światła zewnętrznego
+        updateExternalLight(currentSimulationTime)
 
         return EnvironmentState(
             simulationTime = currentSimulationTime.format(formatter),
@@ -822,7 +969,7 @@ class EnvironmentSimulator(
             externalTemperature = externalTemperature,
             timeSpeedMultiplier = timeSpeedMultiplier,
             powerOutage = false,
-            daylightIntensity = 1.0,
+            externalLightLux = externalLightLux,
         )
     }
 
@@ -852,12 +999,12 @@ class EnvironmentSimulator(
         if (!roomExists) {
             return false
         }
-        
+
         // Nie można włączyć ogrzewania podczas awarii zasilania
         if (on && powerOutage) {
             return false
         }
-        
+
         roomHeating[roomId] = on
         return true
     }
