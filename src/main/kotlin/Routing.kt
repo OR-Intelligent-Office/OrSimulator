@@ -9,6 +9,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.seconds
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * Singleton zarządzający instancją symulatora środowiska
@@ -20,12 +22,16 @@ object SimulatorManager {
     fun initialize(
         application: Application,
         startBackgroundUpdates: Boolean = true,
+        randomSeed: Long? = null,
+        initialSimulationTime: LocalDateTime? = null,
     ) {
         if (simulator == null) {
             simulator = EnvironmentSimulator(
                 rooms = defaultRooms(),
                 timeSpeedMultiplier = 1.0,
                 failureProbability = 0.01,
+                randomSeed = randomSeed,
+                initialSimulationTime = initialSimulationTime,
             )
 
             if (startBackgroundUpdates) {
@@ -53,7 +59,21 @@ object SimulatorManager {
 
 fun Application.configureRouting() {
     install(Resources)
-    SimulatorManager.initialize(this)
+    
+    // Read random seed from environment variable for deterministic testing
+    val randomSeed = System.getenv("SIMULATOR_RANDOM_SEED")?.toLongOrNull()
+    
+    // Read initial simulation time from environment variable (format: ISO_LOCAL_DATE_TIME, e.g., "2026-01-08T08:00:00")
+    val initialSimulationTime = System.getenv("SIMULATOR_START_TIME")?.let { timeStr ->
+        try {
+            LocalDateTime.parse(timeStr, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+        } catch (e: Exception) {
+            println("Warning: Invalid SIMULATOR_START_TIME format: $timeStr (expected ISO format: YYYY-MM-DDTHH:MM:SS). Using current time.")
+            null
+        }
+    }
+    
+    SimulatorManager.initialize(this, randomSeed = randomSeed, initialSimulationTime = initialSimulationTime)
 
     routing {
         get("/") {

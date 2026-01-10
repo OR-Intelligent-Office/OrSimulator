@@ -10,11 +10,13 @@ class EnvironmentSimulator(
     private val rooms: List<RoomConfig>,
     private val timeSpeedMultiplier: Double,
     private val failureProbability: Double,
+    randomSeed: Long? = null,
+    initialSimulationTime: LocalDateTime? = null,
 ) {
-    private val random = Random.Default
+    private val random = if (randomSeed != null) Random(randomSeed) else Random.Default
     private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+    private var currentSimulationTime: LocalDateTime = initialSimulationTime ?: LocalDateTime.now()
     private var currentState: EnvironmentState = createInitialState()
-    private var currentSimulationTime: LocalDateTime = LocalDateTime.now()
 
     // Parametry symulacji
     private var externalTemperature: Double = 15.0 // temperatura zewnętrzna w stopniach C
@@ -785,7 +787,7 @@ class EnvironmentSimulator(
             }
 
         return EnvironmentState(
-            simulationTime = LocalDateTime.now().format(formatter),
+            simulationTime = currentSimulationTime.format(formatter),
             rooms = initialRooms,
             externalTemperature = externalTemperature,
             timeSpeedMultiplier = timeSpeedMultiplier,
